@@ -8,8 +8,6 @@ artifacts:
   name: server_x86
 deploy:
 - provider: GitHub
-  tag: server-v$(appveyor_build_version)
-  release: server_x86v$(appveyor_build_version)
   auth_token:
     secure: OdoOhZ2+EJf0DJWOi243B8YIQZjdGtVNMygkNi0BFE2NZARYToAehIHy6UmHfdvK
   repository: 4396NeverBeSlaves/simple_http_server
