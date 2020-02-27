@@ -14,5 +14,3 @@ deploy:
   artifact: server
   draft: true
   prerelease: false
-  on:
-    appveyor_repo_tag: true
