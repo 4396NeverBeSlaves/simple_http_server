@@ -192,7 +192,9 @@ void parse_request_header(httphandle* handle)
     // printf("------------------request header end.---------------------\n");
     // printf("Connection: %s\n", connection_parameter);
 }
-
+void get_content_type(char *file_path,char *content_type){
+	;
+}
 void send_static_doc(httphandle* handle, char* file_path, int file_size)
 {
     int fd;
@@ -203,7 +205,7 @@ void send_static_doc(httphandle* handle, char* file_path, int file_size)
     fd=open(file_path,O_RDONLY);
     handle->write_buf= Mmap(0,file_size,PROT_READ,MAP_PRIVATE,fd,0);
     handle->write_ptr=handle->write_buf;
-    handle->send_file_size=file_path;
+    handle->send_file_size=file_size;
     Close(fd);
     // printf("%s\n",handle->write_buf);
 
@@ -217,7 +219,7 @@ void send_static_doc(httphandle* handle, char* file_path, int file_size)
 
     sprintf(response_header,"HTTP/1.1 200 OK\r\n");
     sprintf(response_header+strlen(response_header),"Server: X-server\r\n");
-    sprintf(response_header+strlen(response_header),"Date: %s\r\n",);
+    sprintf(response_header+strlen(response_header),"Date: %s\r\n",time_string);
     sprintf(response_header+strlen(response_header),"Content-Length: %ld\r\n",handle->send_file_size);
     sprintf(response_header+strlen(response_header),"Content-Type: %s\r\n",content_type);
     sprintf(response_header+strlen(response_header),"Connection: %s\r\n",connetcion);
