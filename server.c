@@ -1,44 +1,80 @@
-#include<stdio.h>
-#include<unistd.h>
-#include<sys/types.h>
-#include<sys/socket.h>
-#include<arpa/inet.h>
-#include<string.h>
+#include <arpa/inet.h>
+#include <ctype.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/epoll.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include "httphandle.h"
+#include "epoll_operation.h"
+#include "wrap.h"
 
-#define SERVER_PORT 8000
+char *default_index_file="./index.html";
 
-int main(){
-    int sfd,cfd,read_num;
-    char buf[BUFSIZ];
-    struct sockaddr_in ssock,csock;
-    socklen_t client_sock_len=sizeof(csock);
+int main(int argc, char** argv)
+{
+    int epfd, current_fd,lfd, events_ready, action_code;
+    int i;
+    struct epoll_event evts[MAXEVENTS];
+    httphandle handles[MAXEVENTS];
+
+    int port=80;
+    char *dir="./";
+
+    if (argc == 3){
+        port=atoi(argv[1]);
+        dir=argv[2];
+    }else
+        printf("use: ./server <port> <www-root>\n");
     
-    char in_ip_addr[20];
-    unsigned int in_ip_port;
-    
-    ssock.sin_family=AF_INET;
-    ssock.sin_port=htons(SERVER_PORT);
-    ssock.sin_addr.s_addr=INADDR_ANY;
-    sfd=socket(AF_INET,SOCK_STREAM,0);
-    printf("serv_fd:%d bind state:%d\n",sfd,bind(sfd,(struct sockaddr *)&ssock,sizeof(struct sockaddr_in)));
-    if(listen(sfd,128)==0)
-        printf("listen success\n");
-    else
-    {
-        printf("error!\n");
+    printf("running at: port:%d dir: %s\n",port,dir);
+    chdir(dir);
+    epfd = Epoll_create(100);
+    lfd = init_listen_fd(port);
+    // printf("lfd:%d\n",lfd);
+    addfd(epfd, lfd);
+
+    while (1) {
+        events_ready = Epoll_wait(epfd, evts, MAXEVENTS, -1);
+        if (events_ready == 0)
+            continue;
+
+        for (i = 0; i < events_ready; i++) {
+
+            current_fd=evts[i].data.fd;
+
+            if (current_fd == lfd) {
+
+                accept_client(epfd, lfd, handles);
+
+            } else if (evts[i].events & EPOLLIN) {
+
+                action_code = do_read(current_fd,&handles[current_fd]);
+                if (action_code == NEED_WRITE) {
+                    modfd(epfd, current_fd, EPOLLOUT);
+                } else {
+                    disconnect(epfd,current_fd);
+                }
+
+            } else if (evts[i].events & EPOLLOUT) {
+
+                action_code = do_write(current_fd,&handles[current_fd]);
+                if (action_code == NEED_READ) {
+                    modfd(epfd, current_fd, EPOLLIN);
+                } else {
+                    disconnect(epfd,current_fd);
+                }
+                
+            }
+        }
     }
-    
-    cfd=accept(sfd,(struct sockaddr *)&csock,&client_sock_len);
-    printf("client fd:%d\n",cfd);
-    while(1){
-        read_num=read(cfd,buf,BUFSIZ);
-        inet_ntop(AF_INET,(void *)&csock.sin_addr.s_addr,in_ip_addr,INET_ADDRSTRLEN);
-        in_ip_port=ntohs(csock.sin_port);
-        printf("connection from %s,port %d\n",in_ip_addr,in_ip_port);
-        sprintf(buf,"hello, %s:%d\n",in_ip_addr,in_ip_port);
-        write(cfd,buf,strlen(buf)+1);
-    }
-    close(cfd);
-    close(sfd);
+
+    Close(epfd);
+    Close(lfd);
     return 0;
 }
