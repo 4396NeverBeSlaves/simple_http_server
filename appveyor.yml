@@ -4,13 +4,13 @@ build_script:
 - sh: make
 test: off
 artifacts:
-- path: ./
-  name: server_deepin
+- path: server_deepin
+  name: server_deepin_x86_64
 deploy:
 - provider: GitHub
   auth_token:
     secure: OdoOhZ2+EJf0DJWOi243B8YIQZjdGtVNMygkNi0BFE2NZARYToAehIHy6UmHfdvK
   repository: 4396NeverBeSlaves/simple_http_server
-  artifact: server_deepin
+  artifact: server_deepin_x86_64
   draft: false
   prerelease: false
