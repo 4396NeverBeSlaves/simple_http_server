@@ -1,16 +1,16 @@
 version: 1.0.{build}
 image: Ubuntu1804
 build_script:
-- sh: make server
+- sh: make
 test: off
 artifacts:
-- path: server
-  name: server_x86
+- path: ./
+  name: server_deepin
 deploy:
 - provider: GitHub
   auth_token:
     secure: OdoOhZ2+EJf0DJWOi243B8YIQZjdGtVNMygkNi0BFE2NZARYToAehIHy6UmHfdvK
   repository: 4396NeverBeSlaves/simple_http_server
-  artifact: server
+  artifact: server_deepin
   draft: false
   prerelease: false
