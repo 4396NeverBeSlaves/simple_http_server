@@ -18,6 +18,12 @@
 
 #define QUERY_STRING_YES 1
 #define QUERY_STRING_NO 0
+
+#define STATIC_FILE 1
+#define DYNAMIC_FILE 0
+
+#define _DEBUG
+
 typedef struct httphandle
 {
     int fd;
@@ -26,18 +32,20 @@ typedef struct httphandle
     char *write_buf;
     char *write_ptr;
     long send_file_size;
-    int connection;
+    char is_static;
+    char connection;
     char host[HOST_LENGTH];
 } httphandle;
 
 void accept_client(int epfd, int lfd, httphandle *handles);
-void disconnect(int epfd, int cfd);
+void disconnect(int epfd, httphandle *handle);
 void init_httphandle(int cfd, httphandle *handle);
 int do_read(int cfd, httphandle *handle);
 int do_write(int cfd, httphandle *handle);
 int read_line(httphandle *handle, char *line_buf);
 int parse_request_line(char *line_buf, int line_size, char *method, char *file_path,char **query_string, char *protocol);
-void parse_request_header(httphandle *handle);
-void send_static_doc(httphandle *handle,char *file_path,int file_size);
+void parse_request_headers(httphandle *handle);
+void send_response_headers(httphandle* handle, char* file_path);
+void mount_static_doc(httphandle *handle,char *file_path);
 void get_content_type(char *file_path,char *content_type);
 #endif

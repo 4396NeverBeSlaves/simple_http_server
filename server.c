@@ -14,12 +14,13 @@
 #include "epoll_operation.h"
 #include "wrap.h"
 
+
 char *default_index_file="./index.html";
 
 int main(int argc, char** argv)
 {
     int epfd, current_fd,lfd, events_ready, action_code;
-    int i;
+    int i,request_count=0;
     struct epoll_event evts[MAXEVENTS];
     httphandle handles[MAXEVENTS];
 
@@ -53,12 +54,14 @@ int main(int argc, char** argv)
                 accept_client(epfd, lfd, handles);
 
             } else if (evts[i].events & EPOLLIN) {
-
+                #ifdef _DEBUG
+                printf("request count:%d\n",++request_count);
+                #endif
                 action_code = do_read(current_fd,&handles[current_fd]);
                 if (action_code == NEED_WRITE) {
                     modfd(epfd, current_fd, EPOLLOUT);
                 } else {
-                    disconnect(epfd,current_fd);
+                    disconnect(epfd,&handles[current_fd]);
                 }
 
             } else if (evts[i].events & EPOLLOUT) {
@@ -66,8 +69,10 @@ int main(int argc, char** argv)
                 action_code = do_write(current_fd,&handles[current_fd]);
                 if (action_code == NEED_READ) {
                     modfd(epfd, current_fd, EPOLLIN);
-                } else {
-                    disconnect(epfd,current_fd);
+                }else if(action_code == NEED_WRITE){
+                    modfd(epfd, current_fd, EPOLLOUT);
+                }else {
+                    disconnect(epfd,&handles[current_fd]);
                 }
                 
             }
