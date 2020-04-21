@@ -48,6 +48,8 @@ begin:
     if ((cfd= accept(lfd, (struct sockaddr*)addr, addrlen)) < 0) {
         if (errno == EINTR)
             goto begin;
+        else if(errno==EAGAIN)
+            return -1;
         else
             perror_exit("Accept error");
     }
@@ -93,7 +95,7 @@ ssize_t readn(int fd, void* buf, size_t count)
 {
     int has_read = 0;
     size_t left = count;
-    char* ptr = buf;
+    char* ptr =(char*) buf;
 
     while (left > 0) {
         if ((has_read = Read(fd, ptr, count)) == 0)
@@ -141,7 +143,7 @@ int init_listen_fd(int port)
 
 void *Mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset){
     char *ptr;
-    if((ptr=mmap(addr,length,prot,flags,fd,offset))==((void *) -1))
+    if((ptr=(char*)mmap(addr,length,prot,flags,fd,offset))==((void *) -1))
         perror_exit("Mmap error");
     return ptr;
 }

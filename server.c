@@ -40,42 +40,69 @@ int main(int argc, char** argv)
     // printf("lfd:%d\n",lfd);
     addfd(epfd, lfd);
 
+    int epoll_wait_times=0;
     while (1) {
+        #ifdef _DEBUG
+        printf("epoll wait times:%d\n",++epoll_wait_times);
+        fflush(stdout);
+        #endif
         events_ready = Epoll_wait(epfd, evts, MAXEVENTS, -1);
-        if (events_ready == 0)
-            continue;
+        #ifdef _DEBUG
+        printf("events_ready:%d\n",events_ready);
+        fflush(stdout);
+        #endif
+        // if (events_ready == 0)
+        //     continue;
 
-        for (i = 0; i < events_ready; i++) {
+        for (i = 0; i < events_ready; ++i) {
 
             current_fd=evts[i].data.fd;
 
             if (current_fd == lfd) {
-
-                accept_client(epfd, lfd, handles);
+                #ifdef _DEBUG
+                printf("client is coming!\n");
+                fflush(stdout);
+                #endif
+                int cli_count;
+                cli_count=accept_clients(epfd, lfd, handles);
+                #ifdef _DEBUG
+                printf("current loop:No.%d  client count:%d\n\n\n\n\n\n",i+1,cli_count);
+                fflush(stdout);
+                #endif
 
             } else if (evts[i].events & EPOLLIN) {
                 #ifdef _DEBUG
-                printf("request count:%d\n",++request_count);
+                printf("EPOLLIN current loop:No.%d cfd:%d request count:%d\n",i+1,current_fd,++request_count);
+                fflush(stdout);
                 #endif
                 action_code = do_read(current_fd,&handles[current_fd]);
-                if (action_code == NEED_WRITE) {
-                    modfd(epfd, current_fd, EPOLLOUT);
-                } else {
+                // if (action_code == NEED_WRITE) {
+                //     #ifdef _DEBUG
+                //     printf("NEED_WRITE NEED_WRITE NEED_WRITE\n");
+                //     fflush(stdout);
+                //     #endif
+                //     modfd(epfd, current_fd, EPOLLOUT);
+                // } else {
                     disconnect(epfd,&handles[current_fd]);
-                }
+                // }
 
-            } else if (evts[i].events & EPOLLOUT) {
-
-                action_code = do_write(current_fd,&handles[current_fd]);
-                if (action_code == NEED_READ) {
-                    modfd(epfd, current_fd, EPOLLIN);
-                }else if(action_code == NEED_WRITE){
-                    modfd(epfd, current_fd, EPOLLOUT);
-                }else {
-                    disconnect(epfd,&handles[current_fd]);
-                }
+            } 
+            // else if (evts[i].events & EPOLLOUT) {
+            //     #ifdef _DEBUG
+            //     printf("EPOLLOUT current loop:No.%d cfd:%d\n",i,current_fd);
+            //     #endif
+            //     action_code = do_write(current_fd,&handles[current_fd]);
+            //     if (action_code == NEED_READ) {
+            //         modfd(epfd, current_fd, EPOLLIN);
+            //     }
+            //     // else if(action_code == NEED_WRITE){
+            //     //     modfd(epfd, current_fd, EPOLLOUT);
+            //     // }
+            //     else {
+            //         disconnect(epfd,&handles[current_fd]);
+            //     }
                 
-            }
+            // }
         }
     }
 

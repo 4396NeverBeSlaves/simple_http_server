@@ -22,8 +22,9 @@
 #define STATIC_FILE 1
 #define DYNAMIC_FILE 0
 
-#define _DEBUG
+ #define _DEBUG
 
+#include<arpa/inet.h>
 typedef struct httphandle
 {
     int fd;
@@ -35,9 +36,10 @@ typedef struct httphandle
     char is_static;
     char connection;
     char host[HOST_LENGTH];
+    struct sockaddr_in6 sock;
 } httphandle;
 
-void accept_client(int epfd, int lfd, httphandle *handles);
+int accept_clients(int epfd, int lfd, httphandle *handles);
 void disconnect(int epfd, httphandle *handle);
 void init_httphandle(int cfd, httphandle *handle);
 int do_read(int cfd, httphandle *handle);

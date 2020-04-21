@@ -15,17 +15,28 @@
 
 extern char* default_index_file;
 
-void accept_client(int epfd, int lfd, httphandle* handles)
+int accept_clients(int epfd, int lfd, httphandle* handles)
 {
-    int cfd;
+    int cfd, cli_count = 0;
     struct sockaddr_in6 cli_sock;
     socklen_t socklen = sizeof(cli_sock);
-
     bzero((void*)&cli_sock, socklen);
-    cfd = Accept(lfd, (struct sockaddr*)&cli_sock, &socklen);
-    addfd(epfd, cfd);
 
-    init_httphandle(cfd, &handles[cfd]);
+    while (1) {
+        if ((cfd = Accept(lfd, (struct sockaddr*)&cli_sock, &socklen)) < 0) {
+            break;
+        }
+        cli_count++;
+#ifdef _DEBUG
+        char client_ip[INET6_ADDRSTRLEN];
+        printf("Connection from %s:%d cfd:%d count:%d\n", inet_ntop(AF_INET6, &cli_sock.sin6_addr, client_ip, INET6_ADDRSTRLEN), ntohs(cli_sock.sin6_port),cfd,cli_count);
+#endif
+        addfd(epfd, cfd);
+        handles[cfd].sock = cli_sock;
+        init_httphandle(cfd, &handles[cfd]);
+    }
+
+    return cli_count;
 }
 
 void init_httphandle(int cfd, httphandle* handle)
@@ -33,44 +44,85 @@ void init_httphandle(int cfd, httphandle* handle)
     handle->fd = cfd;
     handle->read_ptr = handle->read_buf;
     // handle->write_ptr = handle->write_buf;
+    handle->write_ptr = NULL;
     handle->send_file_size = 0;
-    handle->connection = CONNECTION_KEEP_ALIVE;
+    handle->connection = CONNECTION_CLOSE;
     return;
 }
 
-void disconnect(int epfd, httphandle *handle)
+void disconnect(int epfd, httphandle* handle)
 {
+#ifdef _DEBUG
+    char client_ip[INET6_ADDRSTRLEN];
+    printf("%s:%d is closing!\n", inet_ntop(AF_INET6, &handle->sock.sin6_addr, client_ip, INET6_ADDRSTRLEN), ntohs(handle->sock.sin6_port));
+#endif
+
     delfd(epfd, handle->fd);
     Close(handle->fd);
-    if(handle->is_static)
-        Munmap(handle->write_buf,handle->send_file_size);
+    if (handle->is_static && handle->write_buf) {
+        Munmap(handle->write_buf, handle->send_file_size);
+
+        // free(handle->write_buf);
+
+
+        handle->write_buf=NULL;
+    }
 
 #ifdef _DEBUG
     printf("disconnect!\n\n\n\n\n");
+    fflush(stdout);
 #endif
 }
 
 int do_read(int cfd, httphandle* handle)
 {
-    int read_count, line_size;
+    int read_count = 0, line_size, n;
     struct stat file_status;
     char line_buf[LINE_BUF_SIZE];
     char method[10], file_path[LINE_BUF_SIZE], *query_string = NULL, protocol[20];
     file_path[0] = '.';
 
-    if ((read_count = Read(handle->fd, handle->read_buf, READ_BUF_SIZE)) == 0)
+    /*if ((read_count = Read(handle->fd, handle->read_buf, READ_BUF_SIZE)) == 0)
         return NEED_DISCONNECT;
-    else if (read_count == READ_BUF_SIZE)
+    //else if (read_count == READ_BUF_SIZE)
         // send_error("HTTP Error 414. The request URL is too long");
-        return NEED_DISCONNECT;
+        //return NEED_DISCONNECT;*/
+
+    while (1) {
+        if ((n = recv(handle->fd, handle->read_buf + read_count, READ_BUF_SIZE - read_count, 0)) <= 0) {
+            if (n == 0) {
+#ifdef _DEBUG
+                printf("n==0 NEED_DISCONNECT!\n");
+#endif
+                return NEED_DISCONNECT;
+            } else if (errno == EINTR)
+                continue;
+            else if (errno == EAGAIN) {
+#ifdef _DEBUG
+                // write(STDOUT_FILENO,handle->read_buf,read_count);
+                printf("errno==EAGAIN break;\n");
+#endif
+                break;
+            } else
+                perror_exit("read in do_read() error!");
+        }
+        read_count += n;
+    }
 
     line_size = read_line(handle, line_buf);
-    if (line_size == -1)
-        // send_error("400 Bad Request");
+    if (line_size == -1) {
+// send_error("400 Bad Request");
+#ifdef _DEBUG
+        printf("line_size == -1 NEED_DISCONNECT!\n");
+#endif
         return NEED_DISCONNECT;
+    }
 
     if (parse_request_line(line_buf, line_size, method, &file_path[1], &query_string, protocol) == -1) {
-        // send_error("400 Bad Request");
+// send_error("400 Bad Request");
+#ifdef _DEBUG
+        printf("parse_request_line() == -1 NEED_DISCONNECT!\n");
+#endif
         return NEED_DISCONNECT;
     }
 
@@ -79,6 +131,7 @@ int do_read(int cfd, httphandle* handle)
         printf("method:%s file_path:%s query_string:%s protocol:%s\n", method, file_path, query_string, protocol);
     else
         printf("method:%s file_path:%s query_string:<NULL> protocol:%s\n", method, file_path, protocol);
+    fflush(stdout);
 #endif
 
     parse_request_headers(handle);
@@ -89,15 +142,21 @@ int do_read(int cfd, httphandle* handle)
 
     if (stat(file_path, &file_status) < 0) {
         // send_error("404 not found");
+
         return NEED_DISCONNECT;
     }
     handle->send_file_size = file_status.st_size;
     if (S_ISDIR(file_status.st_mode)) {
-        // send_error("403 forbidden");
+// send_error("403 forbidden");
+#ifdef _DEBUG
+        printf("S_ISDIR() NEED_DISCONNECT!\n");
+#endif
         return NEED_DISCONNECT;
     }
-
+#ifdef _DEBUG
     printf("file_path:%s querying file_size:%ld\n", file_path, file_status.st_size);
+    fflush(stdout);
+#endif
     if (strcasecmp(method, "GET") == 0) {
         //static html doc
         if (query_string == NULL) {
@@ -153,9 +212,15 @@ int do_write(int cfd, httphandle* handle)
     */
 
     while (1) {
-        if ((count = write(cfd, handle->write_ptr, handle->send_file_size)) < 0) {
-            if (errno == EAGAIN)
+        if ((count = send(cfd, handle->write_ptr, handle->send_file_size, 0)) < 0) {
+            if (errno == EAGAIN) {
+#ifdef _DEBUG
+                printf("errno == EAGAIN NEED_WRITE!\n");
+                fflush(stdout);
+#endif
                 return NEED_WRITE;
+            }
+
             else if (errno == EINTR)
                 continue;
             else
@@ -166,12 +231,19 @@ int do_write(int cfd, httphandle* handle)
         handle->write_ptr += count;
 
 #ifdef _DEBUG
-        write(STDOUT_FILENO,handle->write_buf,has_written);
+        write(STDOUT_FILENO, handle->write_buf, has_written);
         printf("\n");
+        fflush(stdout);
 #endif
         if (has_written == handle->send_file_size) {
-            if (handle->connection == CONNECTION_CLOSE)
+            if (handle->connection == CONNECTION_CLOSE) {
+#ifdef _DEBUG
+                printf("has_written == handle->send_file_size && CONNECTION_CLOSE NEED_DISCONNECT!\n");
+                fflush(stdout);
+#endif
                 return NEED_DISCONNECT;
+            }
+
             else
                 return NEED_READ;
         }
@@ -193,6 +265,7 @@ int read_line(httphandle* handle, char* line_buf)
 
 #ifdef _DEBUG
     printf("line_size:%d line:%s", line_size, line_buf);
+    fflush(stdout);
 #endif
     handle->read_ptr = index_ptr + 1;
     return line_size;
@@ -221,6 +294,7 @@ void parse_request_headers(httphandle* handle)
 
 #ifdef _DEBUG
     printf("------------------request headers start--------------------\n");
+    fflush(stdout);
 #endif
 
     line_size = read_line(handle, line_buf);
@@ -230,11 +304,10 @@ void parse_request_headers(httphandle* handle)
         // 11 length of "Connection:"
         if (strncasecmp(line_buf, "Connection:", 11) == 0) {
             sscanf(line_buf, "%*s %s", connection_parameter);
-            if (strcasecmp(connection_parameter, "Close\r\n") == 0) {
-                handle->connection = CONNECTION_CLOSE;
+            if (strcasecmp(connection_parameter, "Keep-alive\r\n") == 0) {
+                handle->connection = CONNECTION_KEEP_ALIVE;
             }
-        } else
-            handle->connection = CONNECTION_CLOSE;
+        }
 
         //get other parameters
 
@@ -244,6 +317,7 @@ void parse_request_headers(httphandle* handle)
 #ifdef _DEBUG
     printf("------------------request headers end.---------------------\n");
     printf("Connection: %s\n", connection_parameter);
+    fflush(stdout);
 #endif
 }
 void get_content_type(char* file_path, char* content_type)
@@ -253,6 +327,7 @@ void get_content_type(char* file_path, char* content_type)
     suffix = index(&file_path[1], '.');
 #ifdef _DEBUG
     printf("suffix:%s\n", suffix);
+    fflush(stdout);
 #endif
     if (!strcasecmp(suffix, ".html") || !strcasecmp(suffix, ".htm")) {
         strcpy(content_type, "text/html; charset=utf-8");
@@ -288,6 +363,7 @@ void get_content_type(char* file_path, char* content_type)
 
 #ifdef _DEBUG
     printf("content type:%s\n", content_type);
+    fflush(stdout);
 #endif
 }
 
@@ -318,8 +394,10 @@ void send_response_headers(httphandle* handle, char* file_path)
 
 #ifdef _DEBUG
     printf("send_response_headers:\n%s", response_headers);
+    fflush(stdout);
 #endif
-    Write(handle->fd, response_headers, count);
+    // Write(handle->fd, response_headers, count);
+    send(handle->fd, response_headers, count, 0);
 }
 
 void mount_static_doc(httphandle* handle, char* file_path)
@@ -327,8 +405,18 @@ void mount_static_doc(httphandle* handle, char* file_path)
     int fd;
 
     handle->is_static = STATIC_FILE;
-    fd = open(file_path, O_RDONLY);
+    fd = open(file_path, O_RDONLY, 0);
+
+
+
     handle->write_buf = Mmap(0, handle->send_file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+
+    // handle->write_buf=(char*)malloc(handle->send_file_size);
+    // Read(fd,handle->write_buf,handle->send_file_size);
+
+
+
+
     handle->write_ptr = handle->write_buf;
     Close(fd);
 }

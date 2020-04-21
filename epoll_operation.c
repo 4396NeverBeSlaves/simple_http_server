@@ -55,7 +55,7 @@ int addfd(int epfd,int fd){
     set_nonblocking(fd);
     evt.events=EPOLLIN|EPOLLET;
     evt.data.fd=fd;
-    printf("epfd:%d cfd:%d\n",epfd,fd);
+    //printf("epfd:%d cfd:%d\n",epfd,fd);
     Epoll_ctl(epfd,EPOLL_CTL_ADD,fd,&evt);
 
     return 0;
