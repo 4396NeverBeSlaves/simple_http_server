@@ -1,9 +1,6 @@
 #ifndef __HTTPHANDLE_H__
 #define __HTTPHANDLE_H__
 
-#define True 1
-#define False 0
-
 #define CONNECTION_CLOSE 0
 #define CONNECTION_KEEP_ALIVE 1
 
@@ -22,7 +19,14 @@
 #define STATIC_FILE 1
 #define DYNAMIC_FILE 0
 
- #define _DEBUG
+#define RESPONSE_STATUS_200_OK "OK"
+#define RESPONSE_STATUS_404_NOT_FOUND "Not Found"
+#define RESPONSE_STATUS_400_BAD_REQUEST "Bad Request"
+#define RESPONSE_STATUS_403_Forbidden "Forbidden"
+#define RESPONSE_STATUS_414_REQUEST_URI_TOO_LARGE "Request-URI Too Large"
+#define RESPONSE_STATUS_501_NOT_IMPLEMENTED "Not Implemented"
+
+#define _DEBUG
 
 #include<arpa/inet.h>
 typedef struct httphandle
@@ -47,7 +51,8 @@ int do_write(int cfd, httphandle *handle);
 int read_line(httphandle *handle, char *line_buf);
 int parse_request_line(char *line_buf, int line_size, char *method, char *file_path,char **query_string, char *protocol);
 void parse_request_headers(httphandle *handle);
-void send_response_headers(httphandle* handle, char* file_path);
+void send_response_headers(httphandle* handle, char* file_path,int response_status_code,char *response_status_string);
 void mount_static_doc(httphandle *handle,char *file_path);
 void get_content_type(char *file_path,char *content_type);
+int send_error_page(httphandle *handle,int response_status_code,char *response_status_string);
 #endif
