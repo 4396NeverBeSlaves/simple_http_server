@@ -141,7 +141,7 @@ int do_read(int cfd, httphandle* handle)
         return send_error_page(handle, 400, RESPONSE_STATUS_400_BAD_REQUEST);
     }
 
-    if (parse_request_line(line_buf, line_size, method, &file_path[1], &query_string, protocol) == -1) {
+    if (parse_request_line(line_buf, method, &file_path[1], &query_string, protocol) == -1) {
 #ifdef _DEBUG
         printf("parse_request_line() == -1 NEED_DISCONNECT!\n");
         fflush(stdout);
