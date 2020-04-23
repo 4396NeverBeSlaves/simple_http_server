@@ -79,41 +79,33 @@ int do_read(int cfd, httphandle* handle)
 {
     int read_count = 0, line_size, n;
     struct stat file_status;
-    char line_buf[LINE_BUF_SIZE];
-    char method[10], file_path[LINE_BUF_SIZE], *query_string = NULL, protocol[20];
+    char line_buf[LINE_BUF_SIZE]; 
+    char method[10], file_path[LINE_BUF_SIZE], *query_string = NULL, protocol[20];//这里query_string只存放一个在file_path中'?'后面查询串的第一个字符地址
     file_path[0] = '.';
 
     handle->read_ptr = handle->read_buf;
     handle->write_ptr = NULL;
+
     /*if ((read_count = Read(handle->fd, handle->read_buf, READ_BUF_SIZE)) == 0)
         return NEED_DISCONNECT;
     //else if (read_count == READ_BUF_SIZE)
         // send_error("HTTP Error 414. The request URL is too long");
         //return NEED_DISCONNECT;*/
 #ifdef _DEBUG
-        char client_ip[INET6_ADDRSTRLEN];
-        printf("This is %s:%d cfd:%d \n", inet_ntop(AF_INET6, &handle->sock.sin6_addr, client_ip, INET6_ADDRSTRLEN), ntohs(handle->sock.sin6_port), cfd);
-        fflush(stdout);
+    char client_ip[INET6_ADDRSTRLEN];
+    printf("This is %s:%d cfd:%d \n", inet_ntop(AF_INET6, &handle->sock.sin6_addr, client_ip, INET6_ADDRSTRLEN), ntohs(handle->sock.sin6_port), cfd);
+    fflush(stdout);
 #endif
 
     while (1) {
         if ((n = recv(handle->fd, handle->read_buf + read_count, READ_BUF_SIZE - read_count, 0)) <= 0) {
-            if (n == 0 ) {
-                // if(handle->connection==CONNECTION_CLOSE){
+            if (n == 0) {
+
 #ifdef _DEBUG
-                    printf("n==0(recv zero byte) && handle->connection==CONNECTION_CLOSE, NEED_DISCONNECT!\n");
-                    fflush(stdout);
+                printf("n==0(recv zero byte) && handle->connection==CONNECTION_CLOSE, NEED_DISCONNECT!\n");
+                fflush(stdout);
 #endif
-                    return NEED_DISCONNECT;
-                // }
-//                 else{
-// #ifdef _DEBUG///////////////////////////////////////////////////////////////////////
-//                     printf("n==0(recv zero byte) && handle->connection==CONNECTION_KEEP_ALIVE, NEED_READ!\n");
-//                     fflush(stdout);
-// #endif
-//                     return NEED_READ;
-//                 }
-                
+                return NEED_DISCONNECT;
 
             } else if (errno == EINTR)
                 continue;
@@ -124,16 +116,19 @@ int do_read(int cfd, httphandle* handle)
                 fflush(stdout);
 #endif
                 break;
-            } else
-                perror_exit("recv in do_read() error!");
+            } else {
+                perror("recv in do_read() error!");
+                printf(" close this connection!\n");
+                return NEED_DISCONNECT;
+            }
         }
         read_count += n;
 #ifdef _DEBUG
-                handle->read_buf[read_count]='\0';
-                printf("read_count:%d content:\n%s",read_count,handle->read_buf);
-                // write(STDOUT_FILENO,handle->read_buf,read_count);
-                
-                fflush(stdout);
+        handle->read_buf[read_count] = '\0';
+        printf("read_count:%d content:\n%s", read_count, handle->read_buf);
+        // write(STDOUT_FILENO,handle->read_buf,read_count);
+
+        fflush(stdout);
 #endif
     }
 
@@ -216,37 +211,9 @@ int do_write(int cfd, httphandle* handle)
 
     //若文件没有发送完成
     has_written = handle->write_ptr - handle->write_buf;
-    /*
-    if (has_written < handle->send_file_size) {
-        //send file
-        while (1) {
-            if ((count = write(cfd, handle->write_ptr, handle->send_file_size)) < 0) {
-                if (errno == EAGAIN)
-                    break;
-                else if (errno == EINTR)
-                    continue;
-                else
-                    perror_exit("write to client error");
-            }
-            has_written+=count;
-            handle->write_ptr += count;
-            if(has_written==handle->send_file_size)
-                break;
-        }
-    }
-
-    if (has_written == handle->send_file_size) { //当文件发送完成后 判断连接状态来决定是否关闭连接
-        if (handle->connection == CONNECTION_CLOSE)
-            return NEED_DISCONNECT;
-        else
-            return NEED_READ;
-    }
-
-    return NEED_WRITE;
-    */
 
     while (1) {
-        if ((count = send(cfd, handle->write_ptr, handle->send_file_size, 0)) < 0) {
+        if ((count = send(cfd, handle->write_ptr, handle->send_file_size - has_written, MSG_NOSIGNAL)) < 0) {
             if (errno == EAGAIN) {
 #ifdef _DEBUG
                 printf("errno == EAGAIN NEED_WRITE!\n");
@@ -257,15 +224,21 @@ int do_write(int cfd, httphandle* handle)
 
             else if (errno == EINTR)
                 continue;
-            else
-                perror_exit("write to client error");
+            else {
+                perror("send to client error");
+                printf(" close this connection!\n");
+                return NEED_DISCONNECT;
+            }
         }
 
         has_written += count;
         handle->write_ptr += count;
 
 #ifdef _DEBUG
-        write(STDOUT_FILENO, handle->write_buf, has_written);
+        printf("has_written:%d\n", has_written);
+        printf("----------------------current written content head:%.*s\n----------------------current written content end:%.*s\n", 100, handle->write_ptr - count, 100, handle->write_ptr - 100);
+        // write(STDOUT_FILENO, handle->write_ptr-count, 200);
+
         printf("\n");
         fflush(stdout);
 #endif
@@ -276,10 +249,14 @@ int do_write(int cfd, httphandle* handle)
                 fflush(stdout);
 #endif
                 return NEED_DISCONNECT;
-            }
-
-            else
+            } else {
+#ifdef _DEBUG
+                printf("has_written == handle->send_file_size && CONNECTION_KEEP_ALIVE NEED_READ!\n");
+                fflush(stdout);
+#endif
+                // 如果客户端是长连接的话返回NEED_READ继续监听该客户端的请求
                 return NEED_READ;
+            }
         }
     }
 }
@@ -306,16 +283,26 @@ int read_line(httphandle* handle, char* line_buf)
 }
 
 //-1 wrong;
-int parse_request_line(char* line_buf, int line_size, char* method, char* file_path, char** query_string, char* protocol)
+int parse_request_line(char* line_buf, char* method, char* file_path, char** query_string, char* protocol)
 {
     int ret;
+    // double protocol_version;
 
     ret = sscanf(line_buf, "%s %s %s", method, file_path, protocol);
-    if (ret < 3)
+    //若读不到三个参数、请求方法不是GET或POST、http小于0.9或协议大于1.1，那么就返回错误
+    if (ret < 3 || (strcasecmp(method,"GET") && strcasecmp(method,"POST")) ||strcmp(&protocol[5],"0.9")<0 ||strcmp(&protocol[5],"1.1")>0)
         return -1;
+
+    // protocol_version= atof(&protocol[5]);
+// #ifdef _DEBUG
+//     printf("protocol_version:%.1f\n", protocol_version);
+//     fflush(stdout);
+// #endif
+
+    //将file_path分成两段，把原来路径与串中间的?换成'\0'隔开，不影响路径字符串的使用，'\0'后边为查询串
     *query_string = index(file_path, '?');
     if (*query_string) {
-        (*query_string)[0] = '\0'; //set ? to \0
+        (*query_string)[0] = '\0';
         *query_string += 1;
     }
 
@@ -338,7 +325,7 @@ void parse_request_headers(httphandle* handle)
         // 11 length of "Connection:"
         if (strncasecmp(line_buf, "Connection:", 11) == 0) {
             sscanf(line_buf, "%*s %s", connection_parameter);
-            if (strncasecmp(connection_parameter, "Keep-alive",11)==0) {
+            if (strncasecmp(connection_parameter, "Keep-alive", 11) == 0) {
                 handle->connection = CONNECTION_KEEP_ALIVE;
 #ifdef _DEBUG
                 printf("set handle->connection -> CONNECTION_KEEP_ALIVE\n");
@@ -367,6 +354,10 @@ void get_content_type(char* file_path, char* content_type)
     printf("suffix:%s\n", suffix);
     fflush(stdout);
 #endif
+    if (!suffix) {
+        strcpy(content_type, "application/octet-stream");
+        return;
+    }
     if (!strcasecmp(suffix, ".html") || !strcasecmp(suffix, ".htm")) {
         strcpy(content_type, "text/html; charset=utf-8");
     } else if (!strcasecmp(suffix, ".txt") || !strcasecmp(suffix, ".log")) {
@@ -383,12 +374,16 @@ void get_content_type(char* file_path, char* content_type)
         strcpy(content_type, "image/jpeg");
     } else if (!strcasecmp(suffix, ".png")) {
         strcpy(content_type, "image/png");
+    } else if (!strcasecmp(suffix, ".ico")) {
+        strcpy(content_type, "image/x-icon");
     } else if (!strcasecmp(suffix, ".json")) {
         strcpy(content_type, "application/json");
     } else if (!strcasecmp(suffix, ".pdf")) {
         strcpy(content_type, "application/pdf");
     } else if (!strcasecmp(suffix, ".mp4")) {
         strcpy(content_type, "video/mp4");
+    } else if (!strcasecmp(suffix, ".webm")) {
+        strcpy(content_type, "video/webm");
     } else if (!strcasecmp(suffix, ".mp3")) {
         strcpy(content_type, "audio/mp3");
     } else if (!strcasecmp(suffix, ".wav")) {
@@ -511,4 +506,3 @@ int send_error_page(httphandle* handle, int response_status_code, char* response
         return do_write(handle->fd, handle);
     }
 }
-

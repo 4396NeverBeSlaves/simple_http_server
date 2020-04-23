@@ -1,5 +1,5 @@
 prefix=server_
-target_deepin=deepin
+target_deepin=ubuntu
 target_arm=arm
 target_mipsel=mipsel
 src=$(wildcard ./*.c)
@@ -8,7 +8,10 @@ src=$(wildcard ./*.c)
 
 
 $(target_deepin):$(src)
-	gcc -g -Wall $^ -o $(prefix)$@
+	gcc -g $^ -o $(prefix)$@
+
+debug_version:$(src)
+	gcc -g -Wall -D _DEBUG $^ -o $@
 
 $(target_arm):$(src)
 	arm-linux-gcc -Wall -static $^ -o $(prefix)$@

@@ -26,7 +26,7 @@
 #define RESPONSE_STATUS_414_REQUEST_URI_TOO_LARGE "Request-URI Too Large"
 #define RESPONSE_STATUS_501_NOT_IMPLEMENTED "Not Implemented"
 
-#define _DEBUG
+// #define _DEBUG
 
 #include<arpa/inet.h>
 typedef struct httphandle
@@ -40,6 +40,7 @@ typedef struct httphandle
     char is_static;
     char connection;
     char host[HOST_LENGTH];
+    char protocol_ver[4];
     struct sockaddr_in6 sock;
 } httphandle;
 
@@ -49,7 +50,7 @@ void init_httphandle(int cfd, httphandle *handle);
 int do_read(int cfd, httphandle *handle);
 int do_write(int cfd, httphandle *handle);
 int read_line(httphandle *handle, char *line_buf);
-int parse_request_line(char *line_buf, int line_size, char *method, char *file_path,char **query_string, char *protocol);
+int parse_request_line(char* line_buf, char *method, char *file_path,char **query_string, char *protocol);
 void parse_request_headers(httphandle *handle);
 void send_response_headers(httphandle* handle, char* file_path,int response_status_code,char *response_status_string);
 void mount_static_doc(httphandle *handle,char *file_path);
