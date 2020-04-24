@@ -23,16 +23,17 @@ int main(int argc, char** argv)
     httphandle handles[MAXEVENTS];
 
     int port = 80;
-    char* dir = "./";
+    // char* dir = "./";
 
-    if (argc == 3) {
+    if (argc == 2) {
         port = atoi(argv[1]);
-        dir = argv[2];
+        // dir = argv[2];
     } else
-        printf("use: ./server <port> <www-root>\n");
+        printf("use: ./server <port>\n");
 
-    printf("running at: port:%d dir: %s\n", port, dir);
-    chdir(dir);
+    printf("running at: port:%d\n", port);
+    // printf("running at: port:%d dir: %s\n", port, dir);
+    // chdir(dir);
     epfd = Epoll_create(100);
     lfd = init_listen_fd(port);
     // printf("lfd:%d\n",lfd);

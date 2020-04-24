@@ -47,7 +47,7 @@ void init_httphandle(int cfd, httphandle* handle)
     // handle->write_ptr = handle->write_buf;
     handle->write_ptr = NULL;
     handle->send_file_size = 0;
-    handle->connection = CONNECTION_CLOSE;
+    handle->connection = CONNECTION_KEEP_ALIVE;
     return;
 }
 
@@ -79,8 +79,8 @@ int do_read(int cfd, httphandle* handle)
 {
     int read_count = 0, line_size, n;
     struct stat file_status;
-    char line_buf[LINE_BUF_SIZE]; 
-    char method[10], file_path[LINE_BUF_SIZE], *query_string = NULL, protocol[20];//这里query_string只存放一个在file_path中'?'后面查询串的第一个字符地址
+    char line_buf[LINE_BUF_SIZE];
+    char method[10], file_path[LINE_BUF_SIZE], *query_string = NULL, protocol[20]; //这里query_string只存放一个在file_path中'?'后面查询串的第一个字符地址
     file_path[0] = '.';
 
     handle->read_ptr = handle->read_buf;
@@ -102,7 +102,7 @@ int do_read(int cfd, httphandle* handle)
             if (n == 0) {
 
 #ifdef _DEBUG
-                printf("n==0(recv zero byte) && handle->connection==CONNECTION_CLOSE, NEED_DISCONNECT!\n");
+                printf("n==0(recv zero byte), NEED_DISCONNECT!\n");
                 fflush(stdout);
 #endif
                 return NEED_DISCONNECT;
@@ -141,7 +141,7 @@ int do_read(int cfd, httphandle* handle)
         return send_error_page(handle, 400, RESPONSE_STATUS_400_BAD_REQUEST);
     }
 
-    if (parse_request_line(line_buf, method, &file_path[1], &query_string, protocol) == -1) {
+    if (parse_request_line(handle,line_buf, method, &file_path[1], &query_string, protocol) == -1) {
 #ifdef _DEBUG
         printf("parse_request_line() == -1 NEED_DISCONNECT!\n");
         fflush(stdout);
@@ -243,6 +243,7 @@ int do_write(int cfd, httphandle* handle)
         fflush(stdout);
 #endif
         if (has_written == handle->send_file_size) {
+            // 如果客户端是短连接就直接关闭,若是长连接的话返回NEED_READ继续监听该客户端的请求
             if (handle->connection == CONNECTION_CLOSE) {
 #ifdef _DEBUG
                 printf("has_written == handle->send_file_size && CONNECTION_CLOSE NEED_DISCONNECT!\n");
@@ -254,7 +255,7 @@ int do_write(int cfd, httphandle* handle)
                 printf("has_written == handle->send_file_size && CONNECTION_KEEP_ALIVE NEED_READ!\n");
                 fflush(stdout);
 #endif
-                // 如果客户端是长连接的话返回NEED_READ继续监听该客户端的请求
+                
                 return NEED_READ;
             }
         }
@@ -283,21 +284,21 @@ int read_line(httphandle* handle, char* line_buf)
 }
 
 //-1 wrong;
-int parse_request_line(char* line_buf, char* method, char* file_path, char** query_string, char* protocol)
+int parse_request_line(httphandle *handle,char* line_buf, char* method, char* file_path, char** query_string, char* protocol)
 {
     int ret;
-    // double protocol_version;
 
     ret = sscanf(line_buf, "%s %s %s", method, file_path, protocol);
     //若读不到三个参数、请求方法不是GET或POST、http小于0.9或协议大于1.1，那么就返回错误
-    if (ret < 3 || (strcasecmp(method,"GET") && strcasecmp(method,"POST")) ||strcmp(&protocol[5],"0.9")<0 ||strcmp(&protocol[5],"1.1")>0)
+    if (ret < 3 || (strcasecmp(method, "GET") && strcasecmp(method, "POST")) || strcmp(&protocol[5], "0.9") < 0 || strcmp(&protocol[5], "1.1") > 0)
         return -1;
+    if(strcmp(&protocol[5],"1.1")<0)
+        handle->connection=CONNECTION_CLOSE;
 
-    // protocol_version= atof(&protocol[5]);
-// #ifdef _DEBUG
-//     printf("protocol_version:%.1f\n", protocol_version);
-//     fflush(stdout);
-// #endif
+    #ifdef _DEBUG
+        printf("client http protocol <1.1. connection=CONNECTION_CLOSE\n");
+        fflush(stdout);
+    #endif
 
     //将file_path分成两段，把原来路径与串中间的?换成'\0'隔开，不影响路径字符串的使用，'\0'后边为查询串
     *query_string = index(file_path, '?');
@@ -432,7 +433,8 @@ void send_response_headers(httphandle* handle, char* file_path, int response_sta
     // Write(handle->fd, response_headers, count);
 
     while (1) {
-        if ((n = send(handle->fd, response_headers, count, 0)) < 0) {
+        //设置标志位为MSG_NOSIGNAL|MSG_MORE，1、可以防止收到SIGPIPE信号进程退出，2、等待后方要发送的数据，将响应首部与文档一起发送
+        if ((n = send(handle->fd, response_headers, count, (MSG_NOSIGNAL|MSG_MORE))) < 0) {
 #ifdef _DEBUG
             printf("sent_count<0!\n");
             fflush(stdout);
@@ -487,7 +489,7 @@ int send_error_page(httphandle* handle, int response_status_code, char* response
         handle->send_file_size = strlen(error_page);
         send_response_headers(handle, error_page_file_name, response_status_code, response_status_string);
         while (sent_count < handle->send_file_size) {
-            if ((n = send(handle->fd, error_page + sent_count, handle->send_file_size - sent_count, 0)) < 0) {
+            if ((n = send(handle->fd, error_page + sent_count, handle->send_file_size - sent_count, MSG_NOSIGNAL)) < 0) {
                 if (errno == EINTR || errno == EAGAIN) {
 #ifdef _DEBUG
                     printf("forcedly send! errno == EINTR || errno == EAGAIN in send_error_page()\n");

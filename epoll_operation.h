@@ -4,7 +4,7 @@
 #include <sys/epoll.h>
 #include "wrap.h"
 
-#define MAXEVENTS 1000
+#define MAXEVENTS 1024
 
 int set_nonblocking(int fd);
 int Epoll_create(int size);
