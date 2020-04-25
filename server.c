@@ -1,19 +1,11 @@
 #include "epoll_operation.h"
 #include "httphandle.h"
+#include "vhost_handle.h"
 #include "wrap.h"
-#include <arpa/inet.h>
-#include <ctype.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/epoll.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <unistd.h>
+#include <stdlib.h> //for atoi()
 
-char* default_index_file = "./index.html";
+char* default_index_file = "/index.html";
+vhost_list v_list;
 
 int main(int argc, char** argv)
 {
@@ -21,22 +13,16 @@ int main(int argc, char** argv)
     int i, request_count = 0;
     struct epoll_event evts[MAXEVENTS];
     httphandle handles[MAXEVENTS];
-
     int port = 80;
-    // char* dir = "./";
 
     if (argc == 2) {
         port = atoi(argv[1]);
-        // dir = argv[2];
     } else
         printf("use: ./server <port>\n");
-
+    load_vhost_conf();
     printf("running at: port:%d\n", port);
-    // printf("running at: port:%d dir: %s\n", port, dir);
-    // chdir(dir);
     epfd = Epoll_create(100);
     lfd = init_listen_fd(port);
-    // printf("lfd:%d\n",lfd);
     addfd(epfd, lfd);
 
     int epoll_wait_times = 0;

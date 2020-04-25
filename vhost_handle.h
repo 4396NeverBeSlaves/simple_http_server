@@ -8,10 +8,14 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include "wrap.h"
+
+#define HOST_LENGTH 256
+#define WWW_ROOT_LENGTH 256
 
 typedef struct vhost {
-    char host_name[256];
-    char www_root[256];
+    char host_name[HOST_LENGTH];
+    char www_root[WWW_ROOT_LENGTH];
 } vhost;
 
 typedef struct vhost_list {
@@ -19,7 +23,7 @@ typedef struct vhost_list {
     int vhosts_num;
 } vhost_list;
 
-int read_vhost_conf();
-char* get_vhost_root_path(char* host);
+int load_vhost_conf();
+int  get_vhost_id(char* host);
 
 #endif

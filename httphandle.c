@@ -1,19 +1,7 @@
 #include "httphandle.h"
-#include "epoll_operation.h"
-#include "wrap.h"
-#include <arpa/inet.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <stdlib.h>
-#include <string.h>
-#include <strings.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <time.h>
-#include <unistd.h>
 
 extern char* default_index_file;
+extern vhost_list v_list;
 
 int accept_clients(int epfd, int lfd, httphandle* handles)
 {
@@ -22,6 +10,7 @@ int accept_clients(int epfd, int lfd, httphandle* handles)
     socklen_t socklen = sizeof(cli_sock);
     bzero((void*)&cli_sock, socklen);
 
+    //当有客户端建立连接时，可能不止有一个，需要一直accept到没有新客户端连入。如果不这样监听的话，每次只接受1个，会丢失连接事件。
     while (1) {
         if ((cfd = Accept(lfd, (struct sockaddr*)&cli_sock, &socklen)) < 0) {
             break;
@@ -31,9 +20,9 @@ int accept_clients(int epfd, int lfd, httphandle* handles)
         char client_ip[INET6_ADDRSTRLEN];
         printf("Connection from %s:%d cfd:%d count:%d\n", inet_ntop(AF_INET6, &cli_sock.sin6_addr, client_ip, INET6_ADDRSTRLEN), ntohs(cli_sock.sin6_port), cfd, cli_count);
         fflush(stdout);
+        handles[cfd].sock = cli_sock;
 #endif
         addfd(epfd, cfd);
-        handles[cfd].sock = cli_sock;
         init_httphandle(cfd, &handles[cfd]);
     }
 
@@ -48,6 +37,7 @@ void init_httphandle(int cfd, httphandle* handle)
     handle->write_ptr = NULL;
     handle->send_file_size = 0;
     handle->connection = CONNECTION_KEEP_ALIVE;
+    handle->host_id = -1;
     return;
 }
 
@@ -78,11 +68,12 @@ void disconnect(int epfd, httphandle* handle)
 int do_read(int cfd, httphandle* handle)
 {
     int read_count = 0, line_size, n;
-    struct stat file_status;
+    struct stat file_status; //请求文件的状态
     char line_buf[LINE_BUF_SIZE];
-    char method[10], file_path[LINE_BUF_SIZE], *query_string = NULL, protocol[20]; //这里query_string只存放一个在file_path中'?'后面查询串的第一个字符地址
-    file_path[0] = '.';
+    char method[10], request_path[LINE_BUF_SIZE], file_path[LINE_BUF_SIZE], query_string[LINE_BUF_SIZE], protocol[20]; //将request_path分成文件路径与请求串
+    query_string[0] = '\0'; //可以以此来判断是否有查询串
 
+    //每次读取请求时先把指针复原
     handle->read_ptr = handle->read_buf;
     handle->write_ptr = NULL;
 
@@ -141,7 +132,7 @@ int do_read(int cfd, httphandle* handle)
         return send_error_page(handle, 400, RESPONSE_STATUS_400_BAD_REQUEST);
     }
 
-    if (parse_request_line(handle,line_buf, method, &file_path[1], &query_string, protocol) == -1) {
+    if (parse_request_line(handle, line_buf, method, request_path, query_string, protocol) == -1) {
 #ifdef _DEBUG
         printf("parse_request_line() == -1 NEED_DISCONNECT!\n");
         fflush(stdout);
@@ -150,20 +141,30 @@ int do_read(int cfd, httphandle* handle)
     }
 
 #ifdef _DEBUG
-    if (query_string)
-        printf("method:%s file_path:%s query_string:%s protocol:%s\n", method, file_path, query_string, protocol);
+    if (query_string[0])
+        printf("method:%s request_path:%s query_string:%s protocol:%s\n", method, request_path, query_string, protocol);
     else
-        printf("method:%s file_path:%s query_string:<NULL> protocol:%s\n", method, file_path, protocol);
+        printf("method:%s request_path:%s query_string:<NULL> protocol:%s\n", method, request_path, protocol);
     fflush(stdout);
 #endif
 
     parse_request_headers(handle);
 
-    //判断是不是根目录，若是的话将返回默认首页文件
-    if (strcasecmp(file_path, "./") == 0) {
-        strcpy(file_path, default_index_file);
+    //处理请求虚拟主机在本地中文件的路径
+    if (handle->host_id == -1) {
+#ifdef _DEBUG
+        printf("host not found! NEED_DISCONNECT!\n");
+        fflush(stdout);
+#endif
+        return send_error_page(handle, 400, RESPONSE_STATUS_400_BAD_REQUEST);
     }
 
+    strcpy(file_path, v_list.vhosts[handle->host_id].www_root);
+    if(strcmp(request_path,"/")==0)
+        strcat(file_path,default_index_file);
+    else
+        strcat(file_path, request_path);
+    
     if (stat(file_path, &file_status) < 0) {
 #ifdef _DEBUG
         printf("file not found:%s NEED_DISCONNECT!\n", file_path);
@@ -172,24 +173,22 @@ int do_read(int cfd, httphandle* handle)
         return send_error_page(handle, 404, RESPONSE_STATUS_404_NOT_FOUND);
     }
     handle->send_file_size = file_status.st_size;
-    if (S_ISDIR(file_status.st_mode)) {
-        // send_error("403 forbidden");
 #ifdef _DEBUG
-        printf("S_ISDIR() NEED_DISCONNECT!\n");
+    printf("file_path:%s, request file_size:%ld.\n", file_path, file_status.st_size);
+    fflush(stdout);
+#endif
+    if (S_ISDIR(file_status.st_mode)) {
+#ifdef _DEBUG
+        printf("S_ISDIR() 403 forbidden NEED_DISCONNECT!\n");
         fflush(stdout);
 #endif
         return send_error_page(handle, 403, RESPONSE_STATUS_403_Forbidden);
     }
 
-#ifdef _DEBUG
-    printf("file_path:%s request file_size:%ld\n", file_path, file_status.st_size);
-    fflush(stdout);
-#endif
-
     //判断请求方法
     if (strcasecmp(method, "GET") == 0) {
         //若没有查询字符串，即是静态文档
-        if (query_string == NULL) {
+        if (query_string[0] == '\0') {
             mount_static_doc(handle, file_path);
         } else { //dynamic doc
             ;
@@ -255,7 +254,7 @@ int do_write(int cfd, httphandle* handle)
                 printf("has_written == handle->send_file_size && CONNECTION_KEEP_ALIVE NEED_READ!\n");
                 fflush(stdout);
 #endif
-                
+
                 return NEED_READ;
             }
         }
@@ -270,13 +269,17 @@ int read_line(httphandle* handle, char* line_buf)
     index_ptr = index(handle->read_ptr, '\n');
     if (index_ptr == NULL)
         return -1;
-    line_size = index_ptr + 1 - handle->read_ptr;
+    line_size = index_ptr  - handle->read_ptr + 1;
 
-    strncpy(line_buf, handle->read_ptr, line_size);
-    line_buf[line_size] = '\0';
-
+    // strncpy(line_buf, handle->read_ptr, line_size);
+    memcpy(line_buf, handle->read_ptr, line_size);
+    if(strncmp(line_buf,"\r\n",2)==0)//!!!!!
+        line_buf[line_size] = '\0'; 
+    else
+        line_buf[line_size-2] = '\0';   //将字符串中\r\n置为\0
+    
 #ifdef _DEBUG
-    printf("line_size:%d line:%s", line_size, line_buf);
+    printf("line_size:%d line:%s\n", line_size, line_buf);
     fflush(stdout);
 #endif
     handle->read_ptr = index_ptr + 1;
@@ -284,46 +287,50 @@ int read_line(httphandle* handle, char* line_buf)
 }
 
 //-1 wrong;
-int parse_request_line(httphandle *handle,char* line_buf, char* method, char* file_path, char** query_string, char* protocol)
+int parse_request_line(httphandle* handle, char* line_buf, char* method, char* request_path, char* query_string, char* protocol)
 {
     int ret;
+    char* query_string_index = NULL;
 
-    ret = sscanf(line_buf, "%s %s %s", method, file_path, protocol);
+    ret = sscanf(line_buf, "%s %s %s", method, request_path, protocol);
     //若读不到三个参数、请求方法不是GET或POST、http小于0.9或协议大于1.1，那么就返回错误
     if (ret < 3 || (strcasecmp(method, "GET") && strcasecmp(method, "POST")) || strcmp(&protocol[5], "0.9") < 0 || strcmp(&protocol[5], "1.1") > 0)
         return -1;
-    if(strcmp(&protocol[5],"1.1")<0)
-        handle->connection=CONNECTION_CLOSE;
-
-    #ifdef _DEBUG
+    if (strcmp(&protocol[5], "1.1") < 0) {
+        handle->connection = CONNECTION_CLOSE;
+#ifdef _DEBUG
         printf("client http protocol <1.1. connection=CONNECTION_CLOSE\n");
         fflush(stdout);
-    #endif
+#endif
+    }
 
-    //将file_path分成两段，把原来路径与串中间的?换成'\0'隔开，不影响路径字符串的使用，'\0'后边为查询串
-    *query_string = index(file_path, '?');
-    if (*query_string) {
-        (*query_string)[0] = '\0';
-        *query_string += 1;
+    //将request_path分成两段，把原来路径与串中间的?换成'\0'隔开，'\0'后边为查询串,再将其复制到query_string中
+    query_string_index = index(request_path, '?');
+    if (query_string_index) {
+        query_string_index[0] = '\0';
+        strcpy(query_string, query_string_index + 1);
+        // #ifdef _DEBUG
+        //         printf("query_string:%s\n", query_string);
+        //         fflush(stdout);
+        // #endif
     }
 
     return ret;
 }
 void parse_request_headers(httphandle* handle)
 {
-    char line_buf[LINE_BUF_SIZE], connection_parameter[20];
-    int line_size;
+    char line_buf[LINE_BUF_SIZE], connection_parameter[20],*port_index;
 
 #ifdef _DEBUG
     printf("------------------request headers start--------------------\n");
     fflush(stdout);
 #endif
 
-    line_size = read_line(handle, line_buf);
+    read_line(handle, line_buf);
 
     while (strcmp(line_buf, "\r\n") != 0) {
 
-        // 11 length of "Connection:"
+        //客户端有无请求长连接。11 length of "Connection:"
         if (strncasecmp(line_buf, "Connection:", 11) == 0) {
             sscanf(line_buf, "%*s %s", connection_parameter);
             if (strncasecmp(connection_parameter, "Keep-alive", 11) == 0) {
@@ -335,10 +342,18 @@ void parse_request_headers(httphandle* handle)
             }
         }
 
+        if (strncasecmp(line_buf, "Host:", 5) == 0) {
+            if((port_index=rindex(line_buf,':')))//若请求主机后面带有端口号，那么将 ':' -> '\0'，得出主机字符串，以免端口号影响之后查询www-root目录。
+                *(port_index)='\0';   
+            handle->host_id = get_vhost_id(&line_buf[6]);   //查询请求的host的id，若未查到则为-1
+#ifdef _DEBUG
+            printf("host_id:%d Host: %s\n", handle->host_id, &line_buf[6]);
+#endif
+        }
+
         //get other parameters
 
-        line_size = read_line(handle, line_buf);
-        // line_buf[line_size]='\0';
+        read_line(handle, line_buf);
     }
 #ifdef _DEBUG
     printf("------------------request headers end.---------------------\n");
@@ -350,7 +365,7 @@ void get_content_type(char* file_path, char* content_type)
 {
     char* suffix;
 
-    suffix = index(&file_path[1], '.');
+    suffix = rindex(file_path, '.');
 #ifdef _DEBUG
     printf("suffix:%s\n", suffix);
     fflush(stdout);
@@ -434,7 +449,7 @@ void send_response_headers(httphandle* handle, char* file_path, int response_sta
 
     while (1) {
         //设置标志位为MSG_NOSIGNAL|MSG_MORE，1、可以防止收到SIGPIPE信号进程退出，2、等待后方要发送的数据，将响应首部与文档一起发送
-        if ((n = send(handle->fd, response_headers, count, (MSG_NOSIGNAL|MSG_MORE))) < 0) {
+        if ((n = send(handle->fd, response_headers, count, (MSG_NOSIGNAL | MSG_MORE))) < 0) {
 #ifdef _DEBUG
             printf("sent_count<0!\n");
             fflush(stdout);
