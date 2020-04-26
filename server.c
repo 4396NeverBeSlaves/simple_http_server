@@ -36,8 +36,6 @@ int main(int argc, char** argv)
         printf("events_ready:%d\n", events_ready);
         fflush(stdout);
 #endif
-        // if (events_ready == 0)
-        //     continue;
 
         for (i = 0; i < events_ready; ++i) {
 
@@ -66,7 +64,7 @@ int main(int argc, char** argv)
                     printf("\n\n\n\naction_code == NEED_READ in evts[i].events & EPOLLIN\n\n\n");
                     fflush(stdout);
 #endif
-                    // modfd(epfd, current_fd, EPOLLIN);
+                    continue; //什么也不做，保持长连接。
                 } else if (action_code == NEED_WRITE) {
 #ifdef _DEBUG
                     printf("action_code == NEED_WRITE in evts[i].events & EPOLLIN\n");
@@ -83,17 +81,18 @@ int main(int argc, char** argv)
 #endif
                 action_code = do_write(current_fd, &handles[current_fd]);
                 if (action_code == NEED_READ) {
-                    modfd(epfd, current_fd, EPOLLIN);
 #ifdef _DEBUG
                     printf("\n\n\n\n\n\naction_code == NEED_READ in evts[i].events & EPOLLIN\n");
                     fflush(stdout);
 #endif
+                    modfd(epfd, current_fd, EPOLLIN);
                 } else if (action_code == NEED_WRITE) {
-                    modfd(epfd, current_fd, EPOLLOUT);
+
 #ifdef _DEBUG
                     printf("action_code == NEED_WRITE in evts[i].events & EPOLLIN\n");
                     fflush(stdout);
-#endif
+#endif              
+                    modfd(epfd, current_fd, EPOLLOUT);
                 } else {
                     disconnect(epfd, &handles[current_fd]);
                 }

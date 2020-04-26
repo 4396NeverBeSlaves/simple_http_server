@@ -5,27 +5,26 @@ extern vhost_list v_list;
 
 int load_vhost_conf()
 {
-    int cwd_len;
-    char cwd[WWW_ROOT_LENGTH], line_buf[HOST_LENGTH+WWW_ROOT_LENGTH];
+    char path[WWW_ROOT_LENGTH], line_buf[HOST_LENGTH + WWW_ROOT_LENGTH];
+    v_list.vhosts=malloc(sizeof(vhost)*32);
     v_list.vhosts_num = 0;
     FILE* vhost_conf;
 
-    getcwd(cwd, WWW_ROOT_LENGTH);
-    cwd_len = strlen(cwd);
-    strcpy(&cwd[cwd_len], "/vhost.conf");
+    get_process_path(path);
+    strcat(path, "/vhost.conf");
 #ifdef _DEBUG
-    printf("vhost.conf path:%s\n", cwd);
+    printf("vhost.conf path:%s\n", path);
 #endif
-    if ((vhost_conf = fopen(cwd, "r")) == NULL) {
+    if ((vhost_conf = fopen(path, "r")) == NULL) {
         perror_exit("vhost.conf doesn't exsit!");
     }
-    while (fgets(line_buf, HOST_LENGTH+WWW_ROOT_LENGTH, vhost_conf)) {
+    while (fgets(line_buf, HOST_LENGTH + WWW_ROOT_LENGTH, vhost_conf)) {
 
         if (line_buf[0] == '#' || line_buf[0] == '\n')
             continue;
 
         if (sscanf(line_buf, "%s %s", v_list.vhosts[v_list.vhosts_num].host_name, v_list.vhosts[v_list.vhosts_num].www_root) < 2) {
-            printf("Bad vhost.conf:%s\n",line_buf);
+            printf("Bad vhost.conf:%s\n", line_buf);
             continue;
         }
 
@@ -35,6 +34,9 @@ int load_vhost_conf()
         v_list.vhosts_num++;
     }
     fclose(vhost_conf);
+
+    if(v_list.vhosts_num==0)
+        perror_exit("0 virtual host found. Please configure vhost.conf!");
     return v_list.vhosts_num;
 }
 

@@ -1,14 +1,15 @@
 #ifndef __VHOST_HANDLE_H__
 #define __VHOST_HANDLE_H__
 
+#include "wrap.h"
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <stdlib.h>
-#include "wrap.h"
 
 #define HOST_LENGTH 256
 #define WWW_ROOT_LENGTH 256
@@ -19,11 +20,11 @@ typedef struct vhost {
 } vhost;
 
 typedef struct vhost_list {
-    vhost vhosts[32];
+    vhost *vhosts;
     int vhosts_num;
 } vhost_list;
 
 int load_vhost_conf();
-int  get_vhost_id(char* host);
+int get_vhost_id(char* host);
 
 #endif

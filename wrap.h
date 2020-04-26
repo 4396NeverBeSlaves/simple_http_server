@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 void perror_exit(char* s);
+void get_process_path(char* path);
 int Socket(int domain, int type, int protocol);
 int Bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen);
 int Listen(int sockfd, int backlog);
@@ -20,6 +21,6 @@ ssize_t writen(int fd, const void* buf, size_t count);
 
 int init_listen_fd(int port);
 
-void *Mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset);
-int Munmap(void *addr, size_t length);
+void* Mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset);
+int Munmap(void* addr, size_t length);
 #endif

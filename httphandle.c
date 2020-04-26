@@ -1,5 +1,7 @@
 #include "httphandle.h"
+#include <sys/wait.h>
 
+extern char** __environ;
 extern char* default_index_file;
 extern vhost_list v_list;
 
@@ -37,6 +39,7 @@ void init_httphandle(int cfd, httphandle* handle)
     handle->write_ptr = NULL;
     handle->send_file_size = 0;
     handle->connection = CONNECTION_KEEP_ALIVE;
+    handle->dynamic_doc_headers_length=0;
     handle->host_id = -1;
     return;
 }
@@ -51,11 +54,11 @@ void disconnect(int epfd, httphandle* handle)
 
     delfd(epfd, handle->fd);
     Close(handle->fd);
-    if (handle->is_static && handle->write_buf) {
-        Munmap(handle->write_buf, handle->send_file_size);
-
-        // free(handle->write_buf);
-
+    if (handle->write_buf) {
+        if (handle->static_dynamic == STATIC_FILE)
+            Munmap(handle->write_buf, handle->send_file_size);
+        else
+            free(handle->write_buf);
         handle->write_buf = NULL;
     }
 
@@ -69,9 +72,9 @@ int do_read(int cfd, httphandle* handle)
 {
     int read_count = 0, line_size, n;
     struct stat file_status; //请求文件的状态
-    char line_buf[LINE_BUF_SIZE];
+    char line_buf[LINE_BUF_SIZE], *dynamic_file_buf;
     char method[10], request_path[LINE_BUF_SIZE], file_path[LINE_BUF_SIZE], query_string[LINE_BUF_SIZE], protocol[20]; //将request_path分成文件路径与请求串
-    query_string[0] = '\0'; //可以以此来判断是否有查询串
+    query_string[0] = '\0'; //方便设置环境变量
 
     //每次读取请求时先把指针复原
     handle->read_ptr = handle->read_buf;
@@ -160,11 +163,11 @@ int do_read(int cfd, httphandle* handle)
     }
 
     strcpy(file_path, v_list.vhosts[handle->host_id].www_root);
-    if(strcmp(request_path,"/")==0)
-        strcat(file_path,default_index_file);
+    if (strcmp(request_path, "/") == 0)
+        strcat(file_path, default_index_file);
     else
         strcat(file_path, request_path);
-    
+
     if (stat(file_path, &file_status) < 0) {
 #ifdef _DEBUG
         printf("file not found:%s NEED_DISCONNECT!\n", file_path);
@@ -172,7 +175,6 @@ int do_read(int cfd, httphandle* handle)
 #endif
         return send_error_page(handle, 404, RESPONSE_STATUS_404_NOT_FOUND);
     }
-    handle->send_file_size = file_status.st_size;
 #ifdef _DEBUG
     printf("file_path:%s, request file_size:%ld.\n", file_path, file_status.st_size);
     fflush(stdout);
@@ -184,21 +186,88 @@ int do_read(int cfd, httphandle* handle)
 #endif
         return send_error_page(handle, 403, RESPONSE_STATUS_403_Forbidden);
     }
+    //请求文件存在且不是文件夹的话,依据请求路径来检查是否为动态文档,是否以.cgi后缀
+    check_static_dynamic(handle, request_path);
 
-    //判断请求方法
-    if (strcasecmp(method, "GET") == 0) {
-        //若没有查询字符串，即是静态文档
-        if (query_string[0] == '\0') {
-            mount_static_doc(handle, file_path);
-        } else { //dynamic doc
-            ;
-        }
-    } else if (strcasecmp(method, "POST") == 0) {
-        //
-        ;
+    if (handle->static_dynamic == STATIC_FILE) { //若是静态文档就直接读取文件再发送
+        handle->send_file_size = file_status.st_size;
+        mount_static_doc(handle, file_path);
     } else {
-        return send_error_page(handle, 501, RESPONSE_STATUS_501_NOT_IMPLEMENTED);
+        //判断请求方法
+        if (strcasecmp(method, "GET") == 0) {
+            pid_t pid;
+            char* dynamic_doc_index;
+            int status, pipefd[2];
+            pipe(pipefd);
+            dynamic_file_buf = malloc(1024 * 1024);
+
+            if ((pid = fork()) < 0) {
+                perror("fork() error!");
+                send_error_page(handle, 503, RESPONSE_STATUS_503_SERVICE_UNAVAILABLE);
+                return NEED_DISCONNECT;
+            } else if (pid == 0) {
+                Close(pipefd[0]);
+                dup2(pipefd[1], STDOUT_FILENO);
+                setenv("QUERY_STRING", query_string, 1);
+                execle(file_path, file_path, NULL,__environ);
+            } else {
+                Close(pipefd[1]);
+                read_count= Read(pipefd[0], dynamic_file_buf, 1024 * 1024);
+                dynamic_doc_index=strstr(dynamic_file_buf,"\r\n\r\n");
+                if(!dynamic_doc_index){
+                    perror("Bad dynamic_doc!");
+                    //send error and return disconnect
+                }
+                handle->dynamic_doc_headers_length=dynamic_doc_index+4- dynamic_file_buf;
+                handle->send_file_size=read_count;
+                dynamic_file_buf[handle->send_file_size]='\0';
+                handle->write_ptr = handle->write_buf = dynamic_file_buf;
+                #ifdef _DEBUG
+                printf("%ld bytes read from cgi:%s\n",handle->send_file_size,dynamic_file_buf);
+                fflush(stdout);
+                #endif
+            }
+            wait(&status);
+            if (WIFEXITED(status)) {
+                printf("child exited with %d\n", WEXITSTATUS(status));
+            }
+            if (WIFSIGNALED(status)) {
+                printf("child exited with %d\n", WTERMSIG(status));
+            }
+        } else if (strcasecmp(method, "POST") == 0) {
+            //
+            ;
+        } else {
+            return send_error_page(handle, 501, RESPONSE_STATUS_501_NOT_IMPLEMENTED);
+        }
     }
+
+    // //判断请求方法
+    // if (strcasecmp(method, "GET") == 0) {
+    //     //若没有查询字符串，即是静态文档
+    //     if (query_string[0] == '\0') {
+    //         handle->send_file_size = file_status.st_size;
+    //         mount_static_doc(handle, file_path);
+    //     } else { //dynamic doc
+    //         pid_t pid;
+
+    //         if ((pid = fork()) < 0) {
+    //             perror("fork() error!");
+    //             send_error_page(handle,503,RESPONSE_STATUS_503_SERVICE_UNAVAILABLE);
+    //             return NEED_DISCONNECT;
+    //         } else if (pid == 0) {
+    //             dup2(handle->fd,STDOUT_FILENO);
+    //             setenv("QUERY_STRING",query_string,1);
+    //             execl(file_path,file_path,NULL);
+    //         }
+    //         wait(NULL);
+    //     }
+    // } else if (strcasecmp(method, "POST") == 0) {
+    //     //
+    //     ;
+    // } else {
+    //     return send_error_page(handle, 501, RESPONSE_STATUS_501_NOT_IMPLEMENTED);
+    // }
 
     send_response_headers(handle, file_path, 200, RESPONSE_STATUS_200_OK);
     //处理完之前的任务后，当前socket发送缓冲区为空，开始向客户端回送数据。根据发送的结果来决定是否要继续发送，如当前发送缓冲区已满可稍后在发
@@ -234,8 +303,11 @@ int do_write(int cfd, httphandle* handle)
         handle->write_ptr += count;
 
 #ifdef _DEBUG
+        int dis_length=100;
         printf("has_written:%d\n", has_written);
-        printf("----------------------current written content head:%.*s\n----------------------current written content end:%.*s\n", 100, handle->write_ptr - count, 100, handle->write_ptr - 100);
+        if(has_written<dis_length)
+            dis_length=has_written;
+        printf("----------------------current written content head:%.*s\n----------------------current written content end:%.*s\n",dis_length , handle->write_ptr - count, dis_length, handle->write_ptr - dis_length);
         // write(STDOUT_FILENO, handle->write_ptr-count, 200);
 
         printf("\n");
@@ -269,15 +341,15 @@ int read_line(httphandle* handle, char* line_buf)
     index_ptr = index(handle->read_ptr, '\n');
     if (index_ptr == NULL)
         return -1;
-    line_size = index_ptr  - handle->read_ptr + 1;
+    line_size = index_ptr - handle->read_ptr + 1;
 
     // strncpy(line_buf, handle->read_ptr, line_size);
     memcpy(line_buf, handle->read_ptr, line_size);
-    if(strncmp(line_buf,"\r\n",2)==0)//!!!!!
-        line_buf[line_size] = '\0'; 
+    if (strncmp(line_buf, "\r\n", 2) == 0) //!!!!!
+        line_buf[line_size] = '\0';
     else
-        line_buf[line_size-2] = '\0';   //将字符串中\r\n置为\0
-    
+        line_buf[line_size - 2] = '\0'; //将字符串中\r\n置为\0
+
 #ifdef _DEBUG
     printf("line_size:%d line:%s\n", line_size, line_buf);
     fflush(stdout);
@@ -319,7 +391,7 @@ int parse_request_line(httphandle* handle, char* line_buf, char* method, char* r
 }
 void parse_request_headers(httphandle* handle)
 {
-    char line_buf[LINE_BUF_SIZE], connection_parameter[20],*port_index;
+    char line_buf[LINE_BUF_SIZE], connection_parameter[20], *port_index;
 
 #ifdef _DEBUG
     printf("------------------request headers start--------------------\n");
@@ -343,9 +415,9 @@ void parse_request_headers(httphandle* handle)
         }
 
         if (strncasecmp(line_buf, "Host:", 5) == 0) {
-            if((port_index=rindex(line_buf,':')))//若请求主机后面带有端口号，那么将 ':' -> '\0'，得出主机字符串，以免端口号影响之后查询www-root目录。
-                *(port_index)='\0';   
-            handle->host_id = get_vhost_id(&line_buf[6]);   //查询请求的host的id，若未查到则为-1
+            if ((port_index = rindex(line_buf, ':'))) //若请求主机后面带有端口号，那么将 ':' -> '\0'，得出主机字符串，以免端口号影响之后查询www-root目录。
+                *(port_index) = '\0';
+            handle->host_id = get_vhost_id(&line_buf[6]); //查询请求的host的id，若未查到则为-1
 #ifdef _DEBUG
             printf("host_id:%d Host: %s\n", handle->host_id, &line_buf[6]);
 #endif
@@ -411,7 +483,7 @@ void get_content_type(char* file_path, char* content_type)
     }
 
 #ifdef _DEBUG
-    printf("content type:%s\n", content_type);
+    printf("file content type:%s\n", content_type);
     fflush(stdout);
 #endif
 }
@@ -434,13 +506,14 @@ void send_response_headers(httphandle* handle, char* file_path, int response_sta
     count += sprintf(response_headers, "HTTP/1.1 %d %s\r\n", response_status_code, response_status_string);
     count += sprintf(response_headers + count, "Server: X-server\r\n");
     count += sprintf(response_headers + count, "Date: %s\r\n", time_string);
-    count += sprintf(response_headers + count, "Content-Length: %ld\r\n", handle->send_file_size);
-    count += sprintf(response_headers + count, "Content-Type: %s\r\n", content_type);
+    count += sprintf(response_headers + count, "Content-Length: %ld\r\n", handle->send_file_size-handle->dynamic_doc_headers_length);
     count += sprintf(response_headers + count, "Connection: %s\r\n", connetcion);
     if (handle->connection == CONNECTION_KEEP_ALIVE)
         count += sprintf(response_headers + count, "Keep-Alive: timeout=30, max=1000\r\n");
-    count += sprintf(response_headers + count, "\r\n");
-
+    if (handle->static_dynamic == STATIC_FILE) {
+        count += sprintf(response_headers + count, "Content-Type: %s\r\n", content_type);
+        count += sprintf(response_headers + count, "\r\n");
+    }
 #ifdef _DEBUG
     printf("send_response_headers:\n%s", response_headers);
     fflush(stdout);
@@ -477,7 +550,7 @@ void mount_static_doc(httphandle* handle, char* file_path)
 {
     int fd;
 
-    handle->is_static = STATIC_FILE;
+    handle->static_dynamic = STATIC_FILE;
     fd = open(file_path, O_RDONLY, 0);
 
     handle->write_buf = Mmap(0, handle->send_file_size, PROT_READ, MAP_PRIVATE, fd, 0);
@@ -522,4 +595,23 @@ int send_error_page(httphandle* handle, int response_status_code, char* response
         send_response_headers(handle, error_page_file_name, response_status_code, response_status_string);
         return do_write(handle->fd, handle);
     }
+}
+
+void check_static_dynamic(httphandle* handle, char* request_path)
+{
+    char* suffix;
+
+    suffix = rindex(request_path, '.');
+    if (suffix && strcmp(suffix, ".cgi") == 0) {
+        handle->static_dynamic = DYNAMIC_FILE;
+    } else
+        handle->static_dynamic = STATIC_FILE;
+#ifdef _DEBUG
+    if (handle->static_dynamic == DYNAMIC_FILE) {
+        printf("DYNAMIC_FILE\n");
+    } else {
+        printf("STATIC_FILE\n");
+    }
+    fflush(stdout);
+#endif
 }

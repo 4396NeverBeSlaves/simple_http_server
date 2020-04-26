@@ -6,10 +6,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <strings.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <sys/mman.h>
 
 void perror_exit(char* s)
 {
@@ -45,10 +45,10 @@ int Accept(int lfd, struct sockaddr* addr, socklen_t* addrlen)
     int cfd;
 
 begin:
-    if ((cfd= accept(lfd, (struct sockaddr*)addr, addrlen)) < 0) {
+    if ((cfd = accept(lfd, (struct sockaddr*)addr, addrlen)) < 0) {
         if (errno == EINTR)
             goto begin;
-        else if(errno==EAGAIN)
+        else if (errno == EAGAIN)
             return -1;
         else
             perror_exit("Accept error");
@@ -95,7 +95,7 @@ ssize_t readn(int fd, void* buf, size_t count)
 {
     int has_read = 0;
     size_t left = count;
-    char* ptr =(char*) buf;
+    char* ptr = (char*)buf;
 
     while (left > 0) {
         if ((has_read = Read(fd, ptr, count)) == 0)
@@ -141,15 +141,27 @@ int init_listen_fd(int port)
     return lfd;
 }
 
-void *Mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset){
-    char *ptr;
-    if((ptr=(char*)mmap(addr,length,prot,flags,fd,offset))==((void *) -1))
+void* Mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
+{
+    char* ptr;
+    if ((ptr = (char*)mmap(addr, length, prot, flags, fd, offset)) == ((void*)-1))
         perror_exit("Mmap error");
     return ptr;
 }
 
-int Munmap(void *addr, size_t length){
-    if(munmap(addr,length)<0)
+int Munmap(void* addr, size_t length)
+{
+    if (munmap(addr, length) < 0)
         perror_exit("Munmap error");
     return 0;
+}
+
+void get_process_path(char* path)
+{
+    int path_len;
+
+    if ((path_len = readlink("/proc/self/exe", path, WWW_ROOT_LENGTH)) == WWW_ROOT_LENGTH) {
+        perror_exit("Path too long!");
+    }
+    *(rindex(path, '/')) = '\0';
 }

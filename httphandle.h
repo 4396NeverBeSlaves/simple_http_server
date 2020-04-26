@@ -40,6 +40,8 @@
 #define RESPONSE_STATUS_403_Forbidden "Forbidden"
 #define RESPONSE_STATUS_414_REQUEST_URI_TOO_LARGE "Request-URI Too Large"
 #define RESPONSE_STATUS_501_NOT_IMPLEMENTED "Not Implemented"
+#define RESPONSE_STATUS_503_SERVICE_UNAVAILABLE "Service Unavailable"
+#define RESPONSE_STATUS_505_HTTP_VERSION_NOT_SUPPORTED "HTTP Version Not Supported"
 
 // #define _DEBUG
 
@@ -50,7 +52,8 @@ typedef struct httphandle {
     char* write_buf;
     char* write_ptr;
     long send_file_size;
-    char is_static;
+    int dynamic_doc_headers_length;
+    char static_dynamic;
     char connection;
     int host_id; //请求的host在v_list中的下标，当请求首部里面没有Host字段或者找不到该主机时为-1。
 #ifdef _DEBUG
@@ -67,6 +70,7 @@ int read_line(httphandle* handle, char* line_buf);
 int parse_request_line(httphandle* handle, char* line_buf, char* method, char* request_path, char* query_string, char* protocol);
 void parse_request_headers(httphandle* handle);
 void send_response_headers(httphandle* handle, char* request_path, int response_status_code, char* response_status_string);
+void check_static_dynamic(httphandle* handle, char* path);
 void mount_static_doc(httphandle* handle, char* file_path);
 void get_content_type(char* file_path, char* content_type);
 int send_error_page(httphandle* handle, int response_status_code, char* response_status_string);
