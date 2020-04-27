@@ -24,15 +24,25 @@
 #define NEED_WRITE 1
 #define NEED_DISCONNECT 2
 
+#define POST_DATA_BUF_SIZE 1048576  //=1024*1024
 #define READ_BUF_SIZE 1024
-#define WRITE_BUF_SIZE 4096
+#define WRITE_BUF_SIZE 1048576
 #define LINE_BUF_SIZE 1024
+
+#define REQUEST_GET 0
+#define REQUEST_POST 1
+#define REQUEST_OTHER 2
 
 #define QUERY_STRING_YES 1
 #define QUERY_STRING_NO 0
 
-#define STATIC_FILE 1
-#define DYNAMIC_FILE 0
+#define STATIC_FILE 0
+#define DYNAMIC_FILE 1
+
+//post data form
+#define X_WWW_FORM_URLENCODED 0
+#define FORM_DATA 1 //do not support
+
 
 #define RESPONSE_STATUS_200_OK "OK"
 #define RESPONSE_STATUS_404_NOT_FOUND "Not Found"
@@ -47,14 +57,17 @@
 
 typedef struct httphandle {
     int fd;
-    char read_buf[READ_BUF_SIZE];
-    char* read_ptr;
+    char read_buf[LINE_BUF_SIZE];
+    char* read_ptr; //始终指向未读的第一个字节
     char* write_buf;
     char* write_ptr;
     long send_file_size;
-    int dynamic_doc_headers_length;
-    char static_dynamic;
+    int static_dynamic; //要发送给客户端:若是静态文件则为0，动态文件则>0. 在发送响应首部时，应减去该部分得出http文档真正长度
+    int post_content_length;
+    char post_content_type;
+    char *post_data;
     char connection;
+    char request_method;
     int host_id; //请求的host在v_list中的下标，当请求首部里面没有Host字段或者找不到该主机时为-1。
 #ifdef _DEBUG
     struct sockaddr_in6 sock;
@@ -73,5 +86,8 @@ void send_response_headers(httphandle* handle, char* request_path, int response_
 void check_static_dynamic(httphandle* handle, char* path);
 void mount_static_doc(httphandle* handle, char* file_path);
 void get_content_type(char* file_path, char* content_type);
+int read_post_data(httphandle* handle, int first_read_count);//需要将第一次读取的数据长度传入，方便读取剩下的post data
 int send_error_page(httphandle* handle, int response_status_code, char* response_status_string);
+int run_cgi_get(httphandle* handle, char* file_path, char* query_string);
+int run_cgi_post();
 #endif

@@ -33,14 +33,30 @@ int accept_clients(int epfd, int lfd, httphandle* handles)
 
 void init_httphandle(int cfd, httphandle* handle)
 {
+    // char method[5];
     handle->fd = cfd;
-    handle->read_ptr = handle->read_buf;
     // handle->write_ptr = handle->write_buf;
     handle->write_ptr = NULL;
     handle->send_file_size = 0;
     handle->connection = CONNECTION_KEEP_ALIVE;
-    handle->dynamic_doc_headers_length=0;
+    handle->static_dynamic = STATIC_FILE;
     handle->host_id = -1;
+    handle->post_data = NULL;
+    // recv(cfd, method, 5, MSG_PEEK);
+    // do {
+    // if (strncasecmp(method, "POST", 4) == 0) {
+    // handle->read_ptr = handle->read_buf = malloc(READ_LONG_BUF_SIZE);
+    // handle->request_method=REQUEST_POST;
+    // } else if(strncasecmp(method, "GET", 3) == 0){
+    // handle->read_ptr = handle->read_buf = malloc(READ_SHORT_BUF_SIZE);
+    // handle->request_method=REQUEST_GET;
+    // }else{
+    // handle->read_ptr = handle->read_buf = malloc(READ_SHORT_BUF_SIZE);
+    //     handle->request_method=REQUEST_OTHER;
+    // }
+    //     handle->read_ptr = handle->read_buf = malloc(READ_SHORT_BUF_SIZE);
+    // } while (handle->read_buf==NULL);
+
     return;
 }
 
@@ -61,18 +77,33 @@ void disconnect(int epfd, httphandle* handle)
             free(handle->write_buf);
         handle->write_buf = NULL;
     }
-
+    if(handle->post_data){
+        free(handle->post_data);
+        handle->post_data=NULL;
+    }
 #ifdef _DEBUG
     printf("disconnect!\n\n\n\n\n");
     fflush(stdout);
 #endif
 }
+void get_request_method(httphandle* handle)
+{
+    char method[5];
 
+    recv(handle->fd, method, 5, MSG_PEEK);
+    if (strncasecmp(method, "POST", 4) == 0) {
+        handle->request_method = REQUEST_POST;
+    } else if (strncasecmp(method, "GET", 3) == 0) {
+        handle->request_method = REQUEST_GET;
+    } else {
+        handle->request_method = REQUEST_OTHER;
+    }
+}
 int do_read(int cfd, httphandle* handle)
 {
     int read_count = 0, line_size, n;
     struct stat file_status; //请求文件的状态
-    char line_buf[LINE_BUF_SIZE], *dynamic_file_buf;
+    char line_buf[LINE_BUF_SIZE];
     char method[10], request_path[LINE_BUF_SIZE], file_path[LINE_BUF_SIZE], query_string[LINE_BUF_SIZE], protocol[20]; //将request_path分成文件路径与请求串
     query_string[0] = '\0'; //方便设置环境变量
 
@@ -80,6 +111,7 @@ int do_read(int cfd, httphandle* handle)
     handle->read_ptr = handle->read_buf;
     handle->write_ptr = NULL;
 
+    get_request_method(handle);
     /*if ((read_count = Read(handle->fd, handle->read_buf, READ_BUF_SIZE)) == 0)
         return NEED_DISCONNECT;
     //else if (read_count == READ_BUF_SIZE)
@@ -92,7 +124,7 @@ int do_read(int cfd, httphandle* handle)
 #endif
 
     while (1) {
-        if ((n = recv(handle->fd, handle->read_buf + read_count, READ_BUF_SIZE - read_count, 0)) <= 0) {
+        if ((n = recv(handle->fd, handle->read_buf + read_count, LINE_BUF_SIZE - read_count, 0)) <= 0) {
             if (n == 0) {
 
 #ifdef _DEBUG
@@ -117,11 +149,10 @@ int do_read(int cfd, httphandle* handle)
             }
         }
         read_count += n;
+        //if (read_count == READ_BUF_SIZE)
 #ifdef _DEBUG
         handle->read_buf[read_count] = '\0';
         printf("read_count:%d content:\n%s", read_count, handle->read_buf);
-        // write(STDOUT_FILENO,handle->read_buf,read_count);
-
         fflush(stdout);
 #endif
     }
@@ -176,7 +207,7 @@ int do_read(int cfd, httphandle* handle)
         return send_error_page(handle, 404, RESPONSE_STATUS_404_NOT_FOUND);
     }
 #ifdef _DEBUG
-    printf("file_path:%s, request file_size:%ld.\n", file_path, file_status.st_size);
+    printf("file_path:%s, request file_size:%ld\n", file_path, file_status.st_size);
     fflush(stdout);
 #endif
     if (S_ISDIR(file_status.st_mode)) {
@@ -195,79 +226,22 @@ int do_read(int cfd, httphandle* handle)
     } else {
         //判断请求方法
         if (strcasecmp(method, "GET") == 0) {
-            pid_t pid;
-            char* dynamic_doc_index;
-            int status, pipefd[2];
-            pipe(pipefd);
-            dynamic_file_buf = malloc(1024 * 1024);
-
-            if ((pid = fork()) < 0) {
-                perror("fork() error!");
+            if (run_cgi_get(handle, file_path, query_string) == NEED_DISCONNECT){
                 send_error_page(handle, 503, RESPONSE_STATUS_503_SERVICE_UNAVAILABLE);
                 return NEED_DISCONNECT;
-            } else if (pid == 0) {
-                Close(pipefd[0]);
-                dup2(pipefd[1], STDOUT_FILENO);
-                setenv("QUERY_STRING", query_string, 1);
-                execle(file_path, file_path, NULL,__environ);
-            } else {
-                Close(pipefd[1]);
-                read_count= Read(pipefd[0], dynamic_file_buf, 1024 * 1024);
-                dynamic_doc_index=strstr(dynamic_file_buf,"\r\n\r\n");
-                if(!dynamic_doc_index){
-                    perror("Bad dynamic_doc!");
-                    //send error and return disconnect
-                }
-                handle->dynamic_doc_headers_length=dynamic_doc_index+4- dynamic_file_buf;
-                handle->send_file_size=read_count;
-                dynamic_file_buf[handle->send_file_size]='\0';
-                handle->write_ptr = handle->write_buf = dynamic_file_buf;
-                #ifdef _DEBUG
-                printf("%ld bytes read from cgi:%s\n",handle->send_file_size,dynamic_file_buf);
-                fflush(stdout);
-                #endif
-            }
-            wait(&status);
-            if (WIFEXITED(status)) {
-                printf("child exited with %d\n", WEXITSTATUS(status));
-            }
-            if (WIFSIGNALED(status)) {
-                printf("child exited with %d\n", WTERMSIG(status));
             }
         } else if (strcasecmp(method, "POST") == 0) {
-            //
-            ;
+            //handle->read_ptr 此时指向还未读取的请求体第一个字节，读取剩下的数据
+            if (read_post_data(handle, read_count) == -1)
+                return send_error_page(handle, 400,RESPONSE_STATUS_400_BAD_REQUEST);
+            if(run_cgi_post(handle,file_path)==NEED_DISCONNECT){
+                send_error_page(handle, 503, RESPONSE_STATUS_503_SERVICE_UNAVAILABLE);
+                return NEED_DISCONNECT;
+            }
         } else {
             return send_error_page(handle, 501, RESPONSE_STATUS_501_NOT_IMPLEMENTED);
         }
     }
-
-    // //判断请求方法
-    // if (strcasecmp(method, "GET") == 0) {
-    //     //若没有查询字符串，即是静态文档
-    //     if (query_string[0] == '\0') {
-    //         handle->send_file_size = file_status.st_size;
-    //         mount_static_doc(handle, file_path);
-    //     } else { //dynamic doc
-    //         pid_t pid;
-
-    //         if ((pid = fork()) < 0) {
-    //             perror("fork() error!");
-    //             send_error_page(handle,503,RESPONSE_STATUS_503_SERVICE_UNAVAILABLE);
-    //             return NEED_DISCONNECT;
-    //         } else if (pid == 0) {
-    //             dup2(handle->fd,STDOUT_FILENO);
-    //             setenv("QUERY_STRING",query_string,1);
-    //             execl(file_path,file_path,NULL);
-    //         }
-    //         wait(NULL);
-    //     }
-    // } else if (strcasecmp(method, "POST") == 0) {
-    //     //
-    //     ;
-    // } else {
-    //     return send_error_page(handle, 501, RESPONSE_STATUS_501_NOT_IMPLEMENTED);
-    // }
 
     send_response_headers(handle, file_path, 200, RESPONSE_STATUS_200_OK);
     //处理完之前的任务后，当前socket发送缓冲区为空，开始向客户端回送数据。根据发送的结果来决定是否要继续发送，如当前发送缓冲区已满可稍后在发
@@ -303,11 +277,11 @@ int do_write(int cfd, httphandle* handle)
         handle->write_ptr += count;
 
 #ifdef _DEBUG
-        int dis_length=100;
+        int dis_length = 100;
         printf("has_written:%d\n", has_written);
-        if(has_written<dis_length)
-            dis_length=has_written;
-        printf("----------------------current written content head:%.*s\n----------------------current written content end:%.*s\n",dis_length , handle->write_ptr - count, dis_length, handle->write_ptr - dis_length);
+        if (has_written < dis_length)
+            dis_length = has_written;
+        printf("----------------------current written content head:%.*s\n----------------------current written content end:%.*s\n", dis_length, handle->write_ptr - count, dis_length, handle->write_ptr - dis_length);
         // write(STDOUT_FILENO, handle->write_ptr-count, 200);
 
         printf("\n");
@@ -345,7 +319,7 @@ int read_line(httphandle* handle, char* line_buf)
 
     // strncpy(line_buf, handle->read_ptr, line_size);
     memcpy(line_buf, handle->read_ptr, line_size);
-    if (strncmp(line_buf, "\r\n", 2) == 0) //!!!!!
+    if (strncmp(line_buf, "\r\n", 2) == 0) //!!!!!若是请求首部最后一行
         line_buf[line_size] = '\0';
     else
         line_buf[line_size - 2] = '\0'; //将字符串中\r\n置为\0
@@ -391,7 +365,7 @@ int parse_request_line(httphandle* handle, char* line_buf, char* method, char* r
 }
 void parse_request_headers(httphandle* handle)
 {
-    char line_buf[LINE_BUF_SIZE], connection_parameter[20], *port_index;
+    char line_buf[LINE_BUF_SIZE], connection_parameter[20] = { 0 }, *port_index = NULL;
 
 #ifdef _DEBUG
     printf("------------------request headers start--------------------\n");
@@ -403,7 +377,7 @@ void parse_request_headers(httphandle* handle)
     while (strcmp(line_buf, "\r\n") != 0) {
 
         //客户端有无请求长连接。11 length of "Connection:"
-        if (strncasecmp(line_buf, "Connection:", 11) == 0) {
+        if (!connection_parameter[0] && strncasecmp(line_buf, "Connection:", 11) == 0) {
             sscanf(line_buf, "%*s %s", connection_parameter);
             if (strncasecmp(connection_parameter, "Keep-alive", 11) == 0) {
                 handle->connection = CONNECTION_KEEP_ALIVE;
@@ -414,7 +388,7 @@ void parse_request_headers(httphandle* handle)
             }
         }
 
-        if (strncasecmp(line_buf, "Host:", 5) == 0) {
+        if (handle->host_id == -1 && strncasecmp(line_buf, "Host:", 5) == 0) {
             if ((port_index = rindex(line_buf, ':'))) //若请求主机后面带有端口号，那么将 ':' -> '\0'，得出主机字符串，以免端口号影响之后查询www-root目录。
                 *(port_index) = '\0';
             handle->host_id = get_vhost_id(&line_buf[6]); //查询请求的host的id，若未查到则为-1
@@ -423,6 +397,22 @@ void parse_request_headers(httphandle* handle)
 #endif
         }
 
+        if (handle->request_method == REQUEST_POST) {
+            if (strncasecmp(line_buf, "Content-Length:", 15) == 0) {
+                handle->post_content_length = atoi(index(line_buf, ':') + 2);
+                while (handle->post_data == NULL) { //若之前post过就不用再次分配post data存储空间
+                    handle->post_data = malloc(POST_DATA_BUF_SIZE);
+                }
+            }
+            if(strncasecmp(line_buf, "Content-Type: application/x-www-form-urlencoded", 48) == 0){
+                handle->post_content_type=X_WWW_FORM_URLENCODED;
+            }else{
+                handle->post_content_type=FORM_DATA;
+            }
+#ifdef _DEBUG
+            printf("post_content_length:%d content type code:%d\n", handle->post_content_length,handle->post_content_type);
+#endif
+        }
         //get other parameters
 
         read_line(handle, line_buf);
@@ -432,6 +422,64 @@ void parse_request_headers(httphandle* handle)
     printf("Connection: %s\n", connection_parameter);
     fflush(stdout);
 #endif
+}
+int read_post_data(httphandle* handle, int first_read_count)
+{
+    int has_read = first_read_count - (handle->read_ptr - handle->read_buf); //第一次读完1024字节后，去掉请求首部剩下需要读的post data的长度
+    int left, n, retry_times = 3;
+    memcpy(handle->post_data, handle->read_ptr, has_read);
+
+    left = handle->post_content_length - has_read; //在socket中还剩下的post data的数据长度
+    printf("has_read:%d left:%d\n",has_read,left);
+    if (left > 0) {
+        while (1) {
+            if ((n = recv(handle->fd, handle->post_data + has_read, left, 0)) <= 0) {
+                if (n == 0) {
+
+#ifdef _DEBUG
+                    printf("left > 0 but n==0(recv zero byte), NEED_DISCONNECT!\n");
+                    fflush(stdout);
+#endif
+                    return -1;
+
+                } else if (errno == EINTR)
+                    continue;
+                else if (errno == EAGAIN) {
+                    if (has_read == handle->post_content_length) {
+#ifdef _DEBUG
+                        printf("errno==EAGAIN && has_read==post_content_length. recv end! break; \n");
+                        fflush(stdout);
+#endif
+                        break;
+                    } else {
+                        if (retry_times == 0) {
+#ifdef _DEBUG
+                            printf("errno==EAGAIN && retry_times==0. Bad client, NEED_DISCONNECT! \n");
+                            fflush(stdout);
+#endif
+                            return -1;
+                        } else {
+                            retry_times--;
+                            continue;
+                        }
+                    }
+
+                } else {
+                    perror("recv in read_post_data() error!");
+                    printf(" close this connection!\n");
+                    return -1;
+                }
+            }
+            has_read += n;
+            left -= n;
+        }
+#ifdef _DEBUG
+            handle->post_data[has_read] = '\0';
+            printf("has_read:%d post_data:\n%s", has_read, handle->post_data);
+            fflush(stdout);
+#endif
+    }
+    return has_read;
 }
 void get_content_type(char* file_path, char* content_type)
 {
@@ -506,11 +554,16 @@ void send_response_headers(httphandle* handle, char* file_path, int response_sta
     count += sprintf(response_headers, "HTTP/1.1 %d %s\r\n", response_status_code, response_status_string);
     count += sprintf(response_headers + count, "Server: X-server\r\n");
     count += sprintf(response_headers + count, "Date: %s\r\n", time_string);
-    count += sprintf(response_headers + count, "Content-Length: %ld\r\n", handle->send_file_size-handle->dynamic_doc_headers_length);
+//正常返回200若是静态文件 handle->static_dynamic==0，若是动态文件 handle->static_dynamic>0，将减去动态生成的请求请求首部长度。若返回状态码非200，则直接返回异常页面长度
+    if(response_status_code==200)
+        count += sprintf(response_headers + count, "Content-Length: %ld\r\n", handle->send_file_size - handle->static_dynamic);
+    else
+        count += sprintf(response_headers + count, "Content-Length: %ld\r\n", handle->send_file_size);
     count += sprintf(response_headers + count, "Connection: %s\r\n", connetcion);
-    if (handle->connection == CONNECTION_KEEP_ALIVE)
+    if (handle->connection == CONNECTION_KEEP_ALIVE && response_status_code == 200 )
         count += sprintf(response_headers + count, "Keep-Alive: timeout=30, max=1000\r\n");
-    if (handle->static_dynamic == STATIC_FILE) {
+    //1、静态文件返回 2、动态文件异常返回
+    if (handle->static_dynamic == STATIC_FILE || (handle->static_dynamic == DYNAMIC_FILE && response_status_code!=200)) {
         count += sprintf(response_headers + count, "Content-Type: %s\r\n", content_type);
         count += sprintf(response_headers + count, "\r\n");
     }
@@ -614,4 +667,120 @@ void check_static_dynamic(httphandle* handle, char* request_path)
     }
     fflush(stdout);
 #endif
+}
+
+int run_cgi_get(httphandle* handle, char* file_path, char* query_string)
+{
+    pid_t pid;
+    char *dynamic_doc_index, *dynamic_file_buf;
+    int status, pipefd[2], read_count;
+    pipe(pipefd);
+    dynamic_file_buf = malloc(WRITE_BUF_SIZE);
+    if (dynamic_file_buf == NULL) {
+        perror("allocate dynamic_file_buf failed! NEED_DISCONNECT");
+        return NEED_DISCONNECT;
+    }
+    if ((pid = fork()) < 0) {
+        perror("fork() error! NEED_DISCONNECT");
+        return NEED_DISCONNECT;
+    } else if (pid == 0) {
+        Close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        setenv("QUERY_STRING", query_string, 1);
+        setenv("REQUEST_METHOD","GET",1);
+        execle(file_path, file_path, NULL, __environ);
+    } else {
+        Close(pipefd[1]);
+        read_count = Read(pipefd[0], dynamic_file_buf, WRITE_BUF_SIZE);
+        Close(pipefd[0]);
+        dynamic_doc_index = strstr(dynamic_file_buf, "\r\n\r\n");
+        if (!dynamic_doc_index) {
+            perror("GET. Bad dynamic_doc! NEED_DISCONNECT");
+            // handle->static_dynamic =0;
+            return NEED_DISCONNECT;
+        }
+        // handle->dynamic_doc_headers_length = dynamic_doc_index + 4 - dynamic_file_buf;
+        handle->static_dynamic = dynamic_doc_index + 4 - dynamic_file_buf; //cgi程序发送请求首部的大小 要算上/r/n/r/n
+        handle->send_file_size = read_count;
+        dynamic_file_buf[handle->send_file_size] = '\0';
+        handle->write_ptr = handle->write_buf = dynamic_file_buf;
+#ifdef _DEBUG
+        printf("%ld bytes read from cgi:%s\n", handle->send_file_size, dynamic_file_buf);
+        fflush(stdout);
+#endif
+    }
+    wait(&status);
+#ifdef _DEBUG
+    if (WIFEXITED(status)) {
+        printf("child exited with %d\n", WEXITSTATUS(status));
+    }
+#endif
+    if (WIFSIGNALED(status)) {
+        printf("child exited with error: %d\n", WTERMSIG(status));
+        fflush(stdout);
+        return NEED_DISCONNECT;
+    }
+    return 0;   //仅起占位作用
+}
+
+int run_cgi_post(httphandle *handle,char* file_path){
+    pid_t pid;
+    char *dynamic_doc_index, *dynamic_file_buf,content_length[32];
+    int status, pipe_send_to_child[2],pipe_recv_from_child[2], read_count;
+    pipe(pipe_send_to_child);
+    pipe(pipe_recv_from_child);
+    dynamic_file_buf = malloc(WRITE_BUF_SIZE);
+    if (dynamic_file_buf == NULL) {
+        perror("allocate dynamic_file_buf failed! NEED_DISCONNECT");
+        return NEED_DISCONNECT;
+    }
+    if ((pid = fork()) < 0) {
+        perror("fork() error! NEED_DISCONNECT");
+        return NEED_DISCONNECT;
+    } else if (pid == 0) {
+        Close(pipe_recv_from_child[0]);
+        dup2(pipe_send_to_child[0],STDIN_FILENO);
+        dup2(pipe_recv_from_child[1], STDOUT_FILENO);
+        setenv("REQUEST_METHOD","POST",1);
+        sprintf(content_length,"%d",handle->post_content_length);
+        setenv("CONTENT_LENGTH",content_length,1);
+        setenv("CONTENT_TYPE","application/x-www-form-urlencoded",1);
+        execle(file_path, file_path, NULL, __environ);
+    } else {
+        Close(pipe_send_to_child[0]);
+        Close(pipe_recv_from_child[1]);
+        Write(pipe_send_to_child[1],handle->post_data,handle->post_content_length);
+        Close(pipe_send_to_child[1]);
+        read_count = Read(pipe_recv_from_child[0], dynamic_file_buf, WRITE_BUF_SIZE);
+        Close(pipe_recv_from_child[0]);
+        wait(&status);
+        printf("dynamic_file_buf:%s\n",dynamic_file_buf);
+        dynamic_doc_index = strstr(dynamic_file_buf, "\r\n\r\n");
+        if (!dynamic_doc_index) {
+            perror("POST. Bad dynamic_doc! NEED_DISCONNECT");
+            handle->static_dynamic =STATIC_FILE;
+            return NEED_DISCONNECT;
+        }
+        // handle->dynamic_doc_headers_length = dynamic_doc_index + 4 - dynamic_file_buf;
+        handle->static_dynamic = dynamic_doc_index + 4 - dynamic_file_buf; //cgi程序发送请求首部的大小 要算上/r/n/r/n
+        handle->send_file_size = read_count;
+        dynamic_file_buf[handle->send_file_size] = '\0';
+        handle->write_ptr = handle->write_buf = dynamic_file_buf;
+#ifdef _DEBUG
+        printf("%ld bytes read from cgi:%s\n", handle->send_file_size, dynamic_file_buf);
+        fflush(stdout);
+#endif
+    }
+    
+#ifdef _DEBUG
+    if (WIFEXITED(status)) {
+        printf("child exited with %d\n", WEXITSTATUS(status));
+    }
+#endif
+    if (WIFSIGNALED(status)) {
+        printf("child exited with error: %d\n", WTERMSIG(status));
+        fflush(stdout);
+        return NEED_DISCONNECT;
+    }
+    return 0;   //仅起占位作用
 }
