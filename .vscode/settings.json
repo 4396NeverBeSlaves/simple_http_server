@@ -1,5 +1,12 @@
 {
     "files.associations": {
-        "ctype.h": "c"
+        "ctype.h": "c",
+        "route.h": "c",
+        "stdio.h": "c",
+        "inet.h": "c",
+        "stdlib.h": "c",
+        "string.h": "c",
+        "epoll_operation.h": "c",
+        "unistd.h": "c"
     }
 }
