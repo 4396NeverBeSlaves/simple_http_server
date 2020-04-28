@@ -24,10 +24,10 @@
 #define NEED_WRITE 1
 #define NEED_DISCONNECT 2
 
-#define POST_DATA_BUF_SIZE 1048576  //=1024*1024
-#define READ_BUF_SIZE 1024
+#define POST_DATA_BUF_SIZE 1048576 //=1024*1024
+#define READ_BUF_SIZE 262144 //256*1024
 #define WRITE_BUF_SIZE 1048576
-#define LINE_BUF_SIZE 1024
+#define LINE_BUF_SIZE 2048
 
 #define REQUEST_GET 0
 #define REQUEST_POST 1
@@ -43,7 +43,6 @@
 #define X_WWW_FORM_URLENCODED 0
 #define FORM_DATA 1 //do not support
 
-
 #define RESPONSE_STATUS_200_OK "OK"
 #define RESPONSE_STATUS_404_NOT_FOUND "Not Found"
 #define RESPONSE_STATUS_400_BAD_REQUEST "Bad Request"
@@ -57,18 +56,23 @@
 
 typedef struct httphandle {
     int fd;
-    char read_buf[LINE_BUF_SIZE];
-    char* read_ptr; //始终指向未读的第一个字节
+    int host_id; //请求的host在v_list中的下标，当请求首部里面没有Host字段或者找不到该主机时为-1。
+    char connection;    //是否为长连接
+    char* read_buf;
+    char* read_ptr; //始终指向未处理的第一个字节
+    int read_data_length; //实际读取到的长度
     char* write_buf;
     char* write_ptr;
-    long send_file_size;
-    int static_dynamic; //要发送给客户端:若是静态文件则为0，动态文件则>0. 在发送响应首部时，应减去该部分得出http文档真正长度
-    int post_content_length;
-    char post_content_type;
-    char *post_data;
-    char connection;
-    char request_method;
-    int host_id; //请求的host在v_list中的下标，当请求首部里面没有Host字段或者找不到该主机时为-1。
+    int send_file_size; //要发送给客户端实际数据大小（有时会包括部分响应头部数据）
+    char request_method; //0 GET; 1 POST; 2 OTHER
+    char static_dynamic; //要发送给客户端:若是静态文件则为0，动态文件则==1
+
+    int post_content_length; //客户端在请求首部content-length中post的长度
+
+    char* post_data;    //cgi程序发送来的数据
+    char post_content_type; //cgi程序发送的数据类型
+    int response_headers_length; //来自cgi程序发送来的数据中部分响应首部的长度.在发送响应首部时，应减去该部分得出http文档真正长度
+
 #ifdef _DEBUG
     struct sockaddr_in6 sock;
 #endif
@@ -86,8 +90,8 @@ void send_response_headers(httphandle* handle, char* request_path, int response_
 void check_static_dynamic(httphandle* handle, char* path);
 void mount_static_doc(httphandle* handle, char* file_path);
 void get_content_type(char* file_path, char* content_type);
-int read_post_data(httphandle* handle, int first_read_count);//需要将第一次读取的数据长度传入，方便读取剩下的post data
 int send_error_page(httphandle* handle, int response_status_code, char* response_status_string);
+
 int run_cgi_get(httphandle* handle, char* file_path, char* query_string);
-int run_cgi_post();
+int run_cgi_post(httphandle* handel, char* file_path);
 #endif
