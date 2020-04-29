@@ -180,9 +180,9 @@ int do_read(int cfd, httphandle* handle)
     printf("actual body length:%d\n", (int)(handle->read_data_length - (handle->read_ptr - handle->read_buf)));
     fflush(stdout);
 #endif
-    if (handle->request_method == REQUEST_POST && (handle->read_data_length - (handle->read_ptr - handle->read_buf)) != handle->post_content_length) {
+    if (handle->request_method == REQUEST_POST && ((handle->read_data_length - (handle->read_ptr - handle->read_buf)) == 0 || (handle->read_data_length - (handle->read_ptr - handle->read_buf)) != handle->post_content_length)) {
 #ifdef _DEBUG
-        printf("Length doesn't macth! NEED_DISCONNECT!\n");
+        printf("Length doesn't macth! or post empty! NEED_DISCONNECT!\n");
         fflush(stdout);
 #endif
         return send_error_page(handle, 400, RESPONSE_STATUS_400_BAD_REQUEST);
@@ -351,15 +351,12 @@ int parse_request_line(httphandle* handle, char* line_buf, char* method, char* r
 #endif
     }
 
+    url_decode(request_path);
     //将request_path分成两段，把原来路径与串中间的?换成'\0'隔开，'\0'后边为查询串,再将其复制到query_string中
     query_string_index = index(request_path, '?');
     if (query_string_index) {
         query_string_index[0] = '\0';
         strcpy(query_string, query_string_index + 1);
-        // #ifdef _DEBUG
-        //         printf("query_string:%s\n", query_string);
-        //         fflush(stdout);
-        // #endif
     }
 
     return ret;
@@ -499,7 +496,7 @@ void send_response_headers(httphandle* handle, char* file_path, int response_sta
     count += sprintf(response_headers + count, "Server: X-server\r\n");
     count += sprintf(response_headers + count, "Date: %s\r\n", time_string);
     //正常返回200若是静态文件 handle->static_dynamic==0，若是动态文件 handle->static_dynamic>0，将减去动态生成的请求请求首部长度。若返回状态码非200，则直接返回异常页面长度
-    if (response_status_code == 200)
+    if (response_status_code == 200 && handle->static_dynamic == DYNAMIC_FILE)
         count += sprintf(response_headers + count, "Content-Length: %d\r\n", handle->send_file_size - handle->response_headers_length);
     else
         count += sprintf(response_headers + count, "Content-Length: %d\r\n", handle->send_file_size);
